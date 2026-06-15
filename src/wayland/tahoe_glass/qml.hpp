@@ -14,8 +14,11 @@
 
 #include "../../core/region.hpp"
 #include "../../window/proxywindow.hpp"
-#include "../background_effect/qml.hpp"
 #include "surface.hpp"
+
+namespace qs::wayland::background_effect {
+class BackgroundEffect;
+}
 
 namespace qs::wayland::tahoe_glass {
 

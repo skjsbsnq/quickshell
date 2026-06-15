@@ -18,6 +18,7 @@ target_link_libraries(quickshell-wayland-tahoe-glass PRIVATE
 	Qt::Quick Qt::WaylandClient Qt::WaylandClientPrivate wayland-client
 	quickshell-wayland-background-effect
 	wlp-tahoe-glass
+	wlp-background-effect
 )
 
 qs_module_pch(quickshell-wayland-tahoe-glass)
