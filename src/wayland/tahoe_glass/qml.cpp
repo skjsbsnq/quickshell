@@ -600,8 +600,9 @@ void TahoeGlass::updateFallback(const QList<impl::TahoeGlassRegionState>& region
 	}
 
 	if (!this->fallbackEffect) {
-		this->fallbackEffect =
-		    qmlAttachedPropertiesObject<background_effect::BackgroundEffect>(this->proxyWindow, true);
+		this->fallbackEffect = qobject_cast<background_effect::BackgroundEffect*>(
+		    qmlAttachedPropertiesObject<background_effect::BackgroundEffect>(this->proxyWindow, true)
+		);
 
 		if (this->fallbackEffect) {
 			QObject::connect(this->fallbackEffect, &QObject::destroyed, this, [this]() {
