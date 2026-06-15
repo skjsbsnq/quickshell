@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="tahoe_glass_v1">
+  <copyright>
+    Copyright 2026 Tahoe contributors
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+  </copyright>
+
+  <interface name="tahoe_glass_manager_v1" version="1">
+    <description summary="Tahoe compositor-owned glass manager">
+      This private protocol lets a client describe exact rounded glass regions
+      for a wl_surface. The compositor owns blur, tint, refraction, clipping,
+      and shadow rendering for those regions.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the manager object"/>
+    </request>
+
+    <request name="get_tahoe_glass_surface">
+      <description summary="create a glass region controller for a surface">
+        The returned object stores pending glass regions for the supplied
+        wl_surface. Pending state is committed together with the next
+        wl_surface commit.
+      </description>
+      <arg name="id" type="new_id" interface="tahoe_glass_surface_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+  </interface>
+
+  <interface name="tahoe_glass_surface_v1" version="1">
+    <description summary="per-surface Tahoe glass regions">
+      Regions are double-buffered and committed with the associated wl_surface.
+      Region coordinates are surface-local logical coordinates.
+    </description>
+
+    <enum name="error">
+      <entry name="invalid_region" value="0" summary="region values are invalid"/>
+    </enum>
+
+    <enum name="region_flags" bitfield="true">
+      <entry name="blur" value="1" summary="render background blur/effect"/>
+      <entry name="shadow" value="2" summary="render compositor-owned shadow"/>
+      <entry name="clip" value="4" summary="clip effect to the rounded region"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the glass surface object"/>
+    </request>
+
+    <request name="set_region">
+      <description summary="set or update a rounded glass region">
+        If a region with the same id already exists, it is replaced. Otherwise
+        a new region is appended, up to the compositor limit.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+      <arg name="radius_tl" type="int"/>
+      <arg name="radius_tr" type="int"/>
+      <arg name="radius_br" type="int"/>
+      <arg name="radius_bl" type="int"/>
+      <arg name="material" type="string"/>
+      <arg name="flags" type="uint"/>
+    </request>
+
+    <request name="remove_region">
+      <description summary="remove one pending region by id"/>
+      <arg name="id" type="uint"/>
+    </request>
+
+    <request name="clear_regions">
+      <description summary="remove all pending regions"/>
+    </request>
+  </interface>
+</protocol>
