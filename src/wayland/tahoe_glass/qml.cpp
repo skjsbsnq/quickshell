@@ -381,6 +381,16 @@ bool TahoeGlass::eventFilter(QObject* object, QEvent* event) {
 			this->pendingRegions = false;
 			this->setAvailable(false);
 		}
+	} else if (event->type() == QEvent::Move || event->type() == QEvent::Resize) {
+		// Catch window geometry changes that don't trigger x/y/width/height signals
+		// This is crucial for niri compositor where window moves may not emit signals
+		this->updateRegions();
+	} else if (event->type() == QEvent::UpdateRequest) {
+		// Also update on frame requests to ensure blur stays synchronized
+		// with window position during animations/transitions
+		if (this->pendingRegions) {
+			this->updateRegions();
+		}
 	}
 
 	return this->QObject::eventFilter(object, event);
@@ -393,6 +403,8 @@ void TahoeGlass::onWindowConnected() {
 	QObject::connect(this->mWindow, &QWindow::visibleChanged, this, &TahoeGlass::onWindowVisibleChanged);
 	QObject::connect(this->mWindow, &QWindow::xChanged, this, &TahoeGlass::updateRegions);
 	QObject::connect(this->mWindow, &QWindow::yChanged, this, &TahoeGlass::updateRegions);
+	QObject::connect(this->mWindow, &QWindow::widthChanged, this, &TahoeGlass::updateRegions);
+	QObject::connect(this->mWindow, &QWindow::heightChanged, this, &TahoeGlass::updateRegions);
 
 	this->onWindowVisibleChanged();
 }
