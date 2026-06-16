@@ -91,7 +91,6 @@ public:
 
 	[[nodiscard]] bool buildLogicalRegion(impl::TahoeGlassRegionState* state) const;
 	[[nodiscard]] bool buildSurfaceRegion(
-	    QWindow* window,
 	    QtWaylandClient::QWaylandWindow* waylandWindow,
 	    impl::TahoeGlassRegionState* state
 	) const;

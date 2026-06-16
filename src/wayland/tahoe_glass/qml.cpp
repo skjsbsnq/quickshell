@@ -4,7 +4,6 @@
 #include <cmath>
 #include <memory>
 
-#include <private/qhighdpiscaling_p.h>
 #include <private/qwaylandwindow_p.h>
 #include <qcoreevent.h>
 #include <qevent.h>
@@ -36,10 +35,6 @@ namespace {
 quint32 nextRegionId() {
 	static quint32 next = 1;
 	return next++;
-}
-
-qint32 scaleInt(qint32 value, qreal scale) {
-	return static_cast<qint32>(std::round(static_cast<qreal>(value) * scale));
 }
 
 } // namespace
@@ -253,32 +248,13 @@ bool TahoeGlassRegion::buildLogicalRegion(impl::TahoeGlassRegionState* state) co
 }
 
 bool TahoeGlassRegion::buildSurfaceRegion(
-    QWindow* window,
     QWaylandWindow* waylandWindow,
     impl::TahoeGlassRegionState* state
 ) const {
-	if (!window || !waylandWindow || !this->buildRegion(state)) return false;
+	if (!waylandWindow || !this->buildRegion(state)) return false;
 
-	// Translate from window-relative coordinates to screen-absolute coordinates
-	// The compositor needs screen coordinates to sample the correct background area
-	auto windowPos = window->position();
-	state->rect.translate(windowPos.x(), windowPos.y());
-
-	auto scale = QHighDpiScaling::factor(window);
-	if (!qFuzzyCompare(scale, 1.0)) {
-		state->rect = QRect(
-		    scaleInt(state->rect.x(), scale),
-		    scaleInt(state->rect.y(), scale),
-		    std::max(1, scaleInt(state->rect.width(), scale)),
-		    std::max(1, scaleInt(state->rect.height(), scale))
-		);
-
-		state->corners.topLeft = scaleInt(state->corners.topLeft, scale);
-		state->corners.topRight = scaleInt(state->corners.topRight, scale);
-		state->corners.bottomRight = scaleInt(state->corners.bottomRight, scale);
-		state->corners.bottomLeft = scaleInt(state->corners.bottomLeft, scale);
-	}
-
+	// TahoeGlass regions are surface-local logical coordinates. The compositor
+	// adds the surface's output location when sampling the background.
 	auto margins = waylandWindow->clientSideMargins();
 	state->rect.translate(margins.left(), margins.top());
 	return true;
@@ -517,7 +493,7 @@ void TahoeGlass::onWindowPolished() {
 		logicalRegions.append(logical);
 
 		impl::TahoeGlassRegionState surfaceRegion;
-		if (region->buildSurfaceRegion(this->mWindow, this->mWaylandWindow, &surfaceRegion)) {
+		if (region->buildSurfaceRegion(this->mWaylandWindow, &surfaceRegion)) {
 			surfaceRegions.append(surfaceRegion);
 		}
 
