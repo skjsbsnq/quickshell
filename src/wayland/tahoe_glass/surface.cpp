@@ -31,7 +31,8 @@ void TahoeGlassSurface::setRegions(const QList<TahoeGlassRegionState>& regions) 
 		    region.corners.bottomRight,
 		    region.corners.bottomLeft,
 		    region.material,
-		    region.flags
+		    region.flags,
+		    wl_fixed_from_double(region.interaction)
 		);
 	}
 }

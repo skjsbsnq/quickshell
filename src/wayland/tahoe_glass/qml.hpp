@@ -41,6 +41,7 @@ class TahoeGlassRegion: public QObject {
 	Q_PROPERTY(bool shadow READ shadow WRITE setShadow NOTIFY shadowChanged);
 	Q_PROPERTY(bool clip READ clip WRITE setClip NOTIFY clipChanged);
 	Q_PROPERTY(bool enabled READ enabled WRITE setEnabled NOTIFY enabledChanged);
+	Q_PROPERTY(qreal interaction READ interaction WRITE setInteraction NOTIFY interactionChanged);
 	// clang-format on
 	QML_ELEMENT;
 
@@ -89,6 +90,9 @@ public:
 	[[nodiscard]] bool enabled() const;
 	void setEnabled(bool enabled);
 
+	[[nodiscard]] qreal interaction() const;
+	void setInteraction(qreal interaction);
+
 	[[nodiscard]] bool buildLogicalRegion(impl::TahoeGlassRegionState* state) const;
 	[[nodiscard]] bool buildSurfaceRegion(
 	    QtWaylandClient::QWaylandWindow* waylandWindow,
@@ -112,6 +116,7 @@ signals:
 	void shadowChanged();
 	void clipChanged();
 	void enabledChanged();
+	void interactionChanged();
 	void changed();
 
 private slots:
@@ -145,6 +150,7 @@ private:
 	bool mShadow = true;
 	bool mClip = true;
 	bool mEnabled = true;
+	qreal mInteraction = 0.0;
 };
 
 class TahoeGlass: public QObject {

@@ -56,6 +56,7 @@ TahoeGlassRegion::TahoeGlassRegion(QObject* parent): QObject(parent), mRegionId(
 	QObject::connect(this, &TahoeGlassRegion::shadowChanged, this, &TahoeGlassRegion::changed);
 	QObject::connect(this, &TahoeGlassRegion::clipChanged, this, &TahoeGlassRegion::changed);
 	QObject::connect(this, &TahoeGlassRegion::enabledChanged, this, &TahoeGlassRegion::changed);
+	QObject::connect(this, &TahoeGlassRegion::interactionChanged, this, &TahoeGlassRegion::changed);
 }
 
 quint32 TahoeGlassRegion::regionId() const { return this->mRegionId; }
@@ -243,6 +244,15 @@ void TahoeGlassRegion::setEnabled(bool enabled) {
 	emit this->enabledChanged();
 }
 
+qreal TahoeGlassRegion::interaction() const { return this->mInteraction; }
+
+void TahoeGlassRegion::setInteraction(qreal interaction) {
+	auto clamped = qBound(0.0, interaction, 1.0);
+	if (qFuzzyCompare(clamped, this->mInteraction)) return;
+	this->mInteraction = clamped;
+	emit this->interactionChanged();
+}
+
 bool TahoeGlassRegion::buildLogicalRegion(impl::TahoeGlassRegionState* state) const {
 	return this->buildRegion(state);
 }
@@ -297,6 +307,7 @@ bool TahoeGlassRegion::buildRegion(impl::TahoeGlassRegionState* state) const {
 	state->corners.bottomRight = std::max(this->bottomRightRadius(), 0);
 	state->corners.bottomLeft = std::max(this->bottomLeftRadius(), 0);
 	state->flags = (this->mBlur ? 1 : 0) | (this->mShadow ? 2 : 0) | (this->mClip ? 4 : 0);
+	state->interaction = this->mInteraction;
 	return true;
 }
 
