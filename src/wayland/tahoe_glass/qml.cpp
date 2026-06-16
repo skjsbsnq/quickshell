@@ -259,6 +259,11 @@ bool TahoeGlassRegion::buildSurfaceRegion(
 ) const {
 	if (!window || !waylandWindow || !this->buildRegion(state)) return false;
 
+	// Translate from window-relative coordinates to screen-absolute coordinates
+	// The compositor needs screen coordinates to sample the correct background area
+	auto windowPos = window->position();
+	state->rect.translate(windowPos.x(), windowPos.y());
+
 	auto scale = QHighDpiScaling::factor(window);
 	if (!qFuzzyCompare(scale, 1.0)) {
 		state->rect = QRect(
@@ -386,6 +391,8 @@ void TahoeGlass::onWindowConnected() {
 	this->mWindow->installEventFilter(this);
 
 	QObject::connect(this->mWindow, &QWindow::visibleChanged, this, &TahoeGlass::onWindowVisibleChanged);
+	QObject::connect(this->mWindow, &QWindow::xChanged, this, &TahoeGlass::updateRegions);
+	QObject::connect(this->mWindow, &QWindow::yChanged, this, &TahoeGlass::updateRegions);
 
 	this->onWindowVisibleChanged();
 }
