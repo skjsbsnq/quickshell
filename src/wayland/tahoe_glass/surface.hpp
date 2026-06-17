@@ -21,9 +21,11 @@ struct TahoeGlassRegionState {
 	QRect rect;
 	TahoeGlassCorners corners;
 	QString material = QStringLiteral("panel");
-	quint32 flags = 0;
-	qreal interaction = 0.0;
-};
+		quint32 flags = 0;
+		qreal interaction = 0.0;
+		qreal materialAlpha = 1.0;
+	};
+
 
 class TahoeGlassSurface: public QtWayland::tahoe_glass_surface_v1 {
 public:
