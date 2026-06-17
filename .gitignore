@@ -5,6 +5,7 @@
 # build files
 /result
 /build/
+/build-tahoe/
 /compile_commands.json
 
 # clangd
