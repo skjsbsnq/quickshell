@@ -1,10 +1,13 @@
 #include "item.hpp"
 
+#include <algorithm>
+
 #include <qdbuserror.h>
 #include <qdbusextratypes.h>
 #include <qdbusmetatype.h>
 #include <qdbuspendingcall.h>
 #include <qdbuspendingreply.h>
+#include <qfileinfo.h>
 #include <qicon.h>
 #include <qlogging.h>
 #include <qloggingcategory.h>
@@ -37,6 +40,33 @@ using namespace qs::menu::platform;
 QS_LOGGING_CATEGORY(logStatusNotifierItem, "quickshell.service.sni.item", QtWarningMsg);
 
 namespace qs::service::sni {
+namespace {
+
+bool iconPixmapUsable(const DBusSniIconPixmap& pixmap) {
+	if (pixmap.width <= 0 || pixmap.height <= 0) return false;
+
+	const auto minBytes = qsizetype(pixmap.width) * qsizetype(pixmap.height) * qsizetype(4);
+	return pixmap.data.size() >= minBytes;
+}
+
+bool hasUsablePixmap(const DBusSniIconPixmapList& pixmaps) {
+	return std::any_of(pixmaps.begin(), pixmaps.end(), iconPixmapUsable);
+}
+
+bool iconNameResolvable(const QString& name, const QString& themePath) {
+	if (name.isEmpty()) return false;
+	if (QIcon::hasThemeIcon(name)) return true;
+	if (themePath.isEmpty()) return false;
+
+	const auto fileName = QFileInfo(name).fileName();
+	return QFileInfo::exists(QString("%1/%2").arg(themePath, fileName));
+}
+
+bool iconNameResolvableFromTheme(const QString& name) {
+	return !name.isEmpty() && QIcon::hasThemeIcon(name);
+}
+
+} // namespace
 
 StatusNotifierItem::StatusNotifierItem(const QString& address, QObject* parent)
     : QObject(parent)
@@ -91,16 +121,23 @@ StatusNotifierItem::StatusNotifierItem(const QString& address, QObject* parent)
 	this->bIcon.setBinding([this]() -> QString {
 		if (this->bStatus.value() == Status::NeedsAttention) {
 			auto name = this->bAttentionIconName.value();
-			if (!name.isEmpty())
+			if (iconNameResolvable(name, this->bIconThemePath.value()))
 				return IconImageProvider::requestString(name, this->bIconThemePath.value());
+			if (hasUsablePixmap(this->bAttentionIconPixmaps.value())
+			    || hasUsablePixmap(this->bIconPixmaps.value()))
+				return this->imageHandle.url() % "/" % QString::number(this->pixmapIndex);
 		} else {
 			auto name = this->bIconName.value();
 			auto overlayName = this->bOverlayIconName.value();
-			if (!name.isEmpty() && overlayName.isEmpty())
+			if (overlayName.isEmpty() && iconNameResolvable(name, this->bIconThemePath.value()))
+				return IconImageProvider::requestString(name, this->bIconThemePath.value());
+			if (iconNameResolvableFromTheme(name) || hasUsablePixmap(this->bIconPixmaps.value()))
+				return this->imageHandle.url() % "/" % QString::number(this->pixmapIndex);
+			if (iconNameResolvable(name, this->bIconThemePath.value()))
 				return IconImageProvider::requestString(name, this->bIconThemePath.value());
 		}
 
-		return this->imageHandle.url() % "/" % QString::number(this->pixmapIndex);
+		return {};
 	});
 
 	this->bHasMenu.setBinding([this]() { return !this->bMenuPath.value().path().isEmpty(); });
@@ -137,6 +174,8 @@ QPixmap StatusNotifierItem::createPixmap(const QSize& size) const {
 		const DBusSniIconPixmap* ret = nullptr;
 
 		for (const auto& pixmap: pixmaps) {
+			if (!iconPixmapUsable(pixmap)) continue;
+
 			if (ret == nullptr) {
 				ret = &pixmap;
 				continue;
