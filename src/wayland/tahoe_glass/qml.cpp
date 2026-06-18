@@ -523,12 +523,14 @@ void TahoeGlass::onWindowPolished() {
 	}
 
 	if (this->surface) {
-		this->surface->setRegions(surfaceRegions);
+		const auto changed = this->surface->setRegions(surfaceRegions);
 		// TahoeGlass regions are double-buffered with wl_surface state. The
 		// region requests above are otherwise only picked up on the next Qt
 		// buffer commit, which can make panels appear to "fix" their glass
 		// geometry only after a hover or animation triggers a repaint.
-		this->mWaylandWindow->commit();
+		if (changed) {
+			this->mWaylandWindow->commit();
+		}
 		this->setAvailable(true);
 		this->clearFallback();
 	} else {
