@@ -82,6 +82,16 @@ qt_add_library(quickshell-wayland STATIC
 	output_tracking.cpp
 )
 
+qt_add_library(quickshell-wayland-attached-surface-lifecycle STATIC
+	attached_surface_lifecycle.cpp
+)
+
+target_link_libraries(quickshell-wayland-attached-surface-lifecycle PRIVATE
+	Qt::Quick Qt::WaylandClient Qt::WaylandClientPrivate
+)
+
+qs_pch(quickshell-wayland-attached-surface-lifecycle SET large)
+
 # required for wl_proxy_safe_deref
 target_link_libraries(quickshell-wayland PRIVATE ${CMAKE_DL_LIBS})
 target_link_options(quickshell PRIVATE "LINKER:--export-dynamic-symbol=wl_proxy_get_listener")

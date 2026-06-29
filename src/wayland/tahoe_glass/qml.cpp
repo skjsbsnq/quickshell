@@ -32,6 +32,8 @@ namespace qs::wayland::tahoe_glass {
 
 namespace {
 
+constexpr auto MaxRegionsPerSurface = 32;
+
 quint32 nextRegionId() {
 	static quint32 next = 1;
 	return next++;
@@ -323,27 +325,15 @@ bool TahoeGlassRegion::buildRegion(impl::TahoeGlassRegionState* state) const {
 }
 
 TahoeGlass* TahoeGlass::qmlAttachedProperties(QObject* object) {
-	auto* proxyWindow = qobject_cast<ProxyWindowBase*>(object);
-
-	if (!proxyWindow) {
-		if (auto* iface = qobject_cast<WindowInterface*>(object)) {
-			proxyWindow = iface->proxyWindow();
-		}
-	}
-
+	auto* proxyWindow = ProxyWindowBase::forObject(object);
 	if (!proxyWindow) return nullptr;
 	return new TahoeGlass(proxyWindow);
 }
 
-TahoeGlass::TahoeGlass(ProxyWindowBase* window): QObject(nullptr), proxyWindow(window) {
-	QObject::connect(window, &ProxyWindowBase::windowConnected, this, &TahoeGlass::onWindowConnected);
+TahoeGlass::TahoeGlass(ProxyWindowBase* window): AttachedSurfaceLifecycle(window) {
 	QObject::connect(window, &ProxyWindowBase::polished, this, &TahoeGlass::onWindowPolished);
 	QObject::connect(window, &ProxyWindowBase::devicePixelRatioChanged, this, &TahoeGlass::updateRegions);
-	QObject::connect(window, &QObject::destroyed, this, &TahoeGlass::onProxyWindowDestroyed);
-
-	if (window->backingWindow()) {
-		this->onWindowConnected();
-	}
+	this->initializeLifecycle();
 }
 
 QQmlListProperty<TahoeGlassRegion> TahoeGlass::regions() {
@@ -371,15 +361,14 @@ void TahoeGlass::setFallbackEnabled(bool enabled) {
 	emit this->fallbackEnabledChanged();
 }
 
-bool TahoeGlass::eventFilter(QObject* object, QEvent* event) {
-	if (event->type() == QEvent::PlatformSurface) {
-		auto* surfaceEvent = dynamic_cast<QPlatformSurfaceEvent*>(event);
-		if (surfaceEvent->surfaceEventType() == QPlatformSurfaceEvent::SurfaceAboutToBeDestroyed) {
-			this->surface = nullptr;
-			this->pendingRegions = false;
-			this->setAvailable(false);
-		}
-	} else if (event->type() == QEvent::Move || event->type() == QEvent::Resize) {
+void TahoeGlass::platformSurfaceAboutToBeDestroyed() {
+	this->surface = nullptr;
+	this->pendingRegions = false;
+	this->setAvailable(false);
+}
+
+bool TahoeGlass::filteredWindowEvent(QObject* object, QEvent* event) {
+	if (event->type() == QEvent::Move || event->type() == QEvent::Resize) {
 		// Catch window geometry changes that don't trigger x/y/width/height signals
 		// This is crucial for niri compositor where window moves may not emit signals
 		this->updateRegions();
@@ -391,60 +380,21 @@ bool TahoeGlass::eventFilter(QObject* object, QEvent* event) {
 		}
 	}
 
-	return this->QObject::eventFilter(object, event);
+	return this->AttachedSurfaceLifecycle::filteredWindowEvent(object, event);
 }
 
-void TahoeGlass::onWindowConnected() {
-	this->mWindow = this->proxyWindow->backingWindow();
-	this->mWindow->installEventFilter(this);
-
-	QObject::connect(this->mWindow, &QWindow::visibleChanged, this, &TahoeGlass::onWindowVisibleChanged);
+void TahoeGlass::backingWindowConnected() {
 	QObject::connect(this->mWindow, &QWindow::xChanged, this, &TahoeGlass::updateRegions);
 	QObject::connect(this->mWindow, &QWindow::yChanged, this, &TahoeGlass::updateRegions);
 	QObject::connect(this->mWindow, &QWindow::widthChanged, this, &TahoeGlass::updateRegions);
 	QObject::connect(this->mWindow, &QWindow::heightChanged, this, &TahoeGlass::updateRegions);
-
-	this->onWindowVisibleChanged();
 }
 
-void TahoeGlass::onWindowVisibleChanged() {
-	if (this->mWindow->isVisible()) {
-		if (!this->mWindow->handle()) {
-			this->mWindow->create();
-		}
-	}
+void TahoeGlass::waylandWindowDestroyed() { this->setAvailable(false); }
 
-	auto* window = dynamic_cast<QWaylandWindow*>(this->mWindow->handle());
-	if (window == this->mWaylandWindow) return;
-
-	if (this->mWaylandWindow) {
-		QObject::disconnect(this->mWaylandWindow, nullptr, this, nullptr);
-	}
-
-	this->mWaylandWindow = window;
-	if (!window) return;
-
-	QObject::connect(this->mWaylandWindow, &QObject::destroyed, this, &TahoeGlass::onWaylandWindowDestroyed);
-	QObject::connect(this->mWaylandWindow, &QWaylandWindow::surfaceCreated, this, &TahoeGlass::onWaylandSurfaceCreated);
-	QObject::connect(this->mWaylandWindow, &QWaylandWindow::surfaceDestroyed, this, &TahoeGlass::onWaylandSurfaceDestroyed);
-
-	if (this->mWaylandWindow->surface()) {
-		this->onWaylandSurfaceCreated();
-	}
-}
-
-void TahoeGlass::onWaylandWindowDestroyed() {
-	this->mWaylandWindow = nullptr;
-	this->setAvailable(false);
-}
-
-void TahoeGlass::onWaylandSurfaceCreated() {
-	auto v = this->mWaylandWindow->property("qs_tahoe_glass");
-	if (v.canConvert<TahoeGlass*>()) {
-		auto* prev = v.value<TahoeGlass*>();
-		if (prev != this && prev->surface) {
-			this->surface.swap(prev->surface);
-		}
+void TahoeGlass::waylandSurfaceCreated() {
+	if (auto* prev = this->previousAttachedObject("qs_tahoe_glass", this); prev && prev->surface) {
+		this->surface.swap(prev->surface);
 	}
 
 	if (!this->surface) {
@@ -455,13 +405,13 @@ void TahoeGlass::onWaylandSurfaceCreated() {
 		}
 	}
 
-	this->mWaylandWindow->setProperty("qs_tahoe_glass", QVariant::fromValue(this));
+	this->setAttachedObject("qs_tahoe_glass", this);
 	this->setAvailable(this->surface != nullptr);
 	this->pendingRegions = true;
-	if (this->proxyWindow) this->proxyWindow->schedulePolish();
+	this->schedulePolish();
 }
 
-void TahoeGlass::onWaylandSurfaceDestroyed() {
+void TahoeGlass::waylandSurfaceDestroyed() {
 	this->surface = nullptr;
 	this->pendingRegions = false;
 	this->setAvailable(false);
@@ -471,8 +421,7 @@ void TahoeGlass::onWaylandSurfaceDestroyed() {
 	}
 }
 
-void TahoeGlass::onProxyWindowDestroyed() {
-	this->proxyWindow = nullptr;
+void TahoeGlass::proxyWindowDestroyed() {
 	this->fallbackEffect = nullptr;
 
 	if (this->surface == nullptr) {
@@ -519,7 +468,7 @@ void TahoeGlass::onWindowPolished() {
 			surfaceRegions.append(surfaceRegion);
 		}
 
-		if (surfaceRegions.size() >= 32) break;
+		if (surfaceRegions.size() >= MaxRegionsPerSurface) break;
 	}
 
 	if (this->surface) {
@@ -657,7 +606,7 @@ void TahoeGlass::updateFallback(const QList<impl::TahoeGlassRegionState>& region
 		child->setBottomLeftRadius(region.corners.bottomLeft);
 		prop.append(&prop, child);
 
-		if (++fallbackCount >= 32) break;
+		if (++fallbackCount >= MaxRegionsPerSurface) break;
 	}
 
 	auto* oldRegion = this->fallbackRegion;

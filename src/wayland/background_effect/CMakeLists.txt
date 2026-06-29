@@ -16,6 +16,7 @@ wl_proto(wlp-background-effect ext-background-effect-v1 "${WAYLAND_PROTOCOLS}/st
 
 target_link_libraries(quickshell-wayland-background-effect PRIVATE
 	Qt::Quick Qt::WaylandClient Qt::WaylandClientPrivate wayland-client
+	quickshell-wayland-attached-surface-lifecycle
 	wlp-background-effect
 )
 

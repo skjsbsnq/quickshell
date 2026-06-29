@@ -24,26 +24,12 @@ using QtWaylandClient::QWaylandWindow;
 namespace qs::wayland::background_effect {
 
 BackgroundEffect* BackgroundEffect::qmlAttachedProperties(QObject* object) {
-	auto* proxyWindow = qobject_cast<ProxyWindowBase*>(object);
-
-	if (!proxyWindow) {
-		if (auto* iface = qobject_cast<WindowInterface*>(object)) {
-			proxyWindow = iface->proxyWindow();
-		}
-	}
-
+	auto* proxyWindow = ProxyWindowBase::forObject(object);
 	if (!proxyWindow) return nullptr;
 	return new BackgroundEffect(proxyWindow);
 }
 
-BackgroundEffect::BackgroundEffect(ProxyWindowBase* window): QObject(nullptr), proxyWindow(window) {
-	QObject::connect(
-	    window,
-	    &ProxyWindowBase::windowConnected,
-	    this,
-	    &BackgroundEffect::onWindowConnected
-	);
-
+BackgroundEffect::BackgroundEffect(ProxyWindowBase* window): AttachedSurfaceLifecycle(window) {
 	QObject::connect(window, &ProxyWindowBase::polished, this, &BackgroundEffect::onWindowPolished);
 
 	QObject::connect(
@@ -53,11 +39,7 @@ BackgroundEffect::BackgroundEffect(ProxyWindowBase* window): QObject(nullptr), p
 	    &BackgroundEffect::updateBlurRegion
 	);
 
-	QObject::connect(window, &QObject::destroyed, this, &BackgroundEffect::onProxyWindowDestroyed);
-
-	if (window->backingWindow()) {
-		this->onWindowConnected();
-	}
+	this->initializeLifecycle();
 }
 
 PendingRegion* BackgroundEffect::blurRegion() const { return this->mBlurRegion; }
@@ -118,78 +100,12 @@ void BackgroundEffect::onWindowPolished() {
 	this->pendingBlurRegion = false;
 }
 
-bool BackgroundEffect::eventFilter(QObject* object, QEvent* event) {
-	if (event->type() == QEvent::PlatformSurface) {
-		auto* surfaceEvent = dynamic_cast<QPlatformSurfaceEvent*>(event);
-		if (surfaceEvent->surfaceEventType() == QPlatformSurfaceEvent::SurfaceAboutToBeDestroyed) {
-			this->surface = nullptr;
-			this->pendingBlurRegion = false;
-		}
-	}
-
-	return this->QObject::eventFilter(object, event);
+void BackgroundEffect::platformSurfaceAboutToBeDestroyed() {
+	this->surface = nullptr;
+	this->pendingBlurRegion = false;
 }
 
-void BackgroundEffect::onWindowConnected() {
-	this->mWindow = this->proxyWindow->backingWindow();
-	this->mWindow->installEventFilter(this);
-
-	QObject::connect(
-	    this->mWindow,
-	    &QWindow::visibleChanged,
-	    this,
-	    &BackgroundEffect::onWindowVisibleChanged
-	);
-
-	this->onWindowVisibleChanged();
-}
-
-void BackgroundEffect::onWindowVisibleChanged() {
-	if (this->mWindow->isVisible()) {
-		if (!this->mWindow->handle()) {
-			this->mWindow->create();
-		}
-	}
-
-	auto* window = dynamic_cast<QWaylandWindow*>(this->mWindow->handle());
-	if (window == this->mWaylandWindow) return;
-
-	if (this->mWaylandWindow) {
-		QObject::disconnect(this->mWaylandWindow, nullptr, this, nullptr);
-	}
-
-	this->mWaylandWindow = window;
-	if (!window) return;
-
-	QObject::connect(
-	    this->mWaylandWindow,
-	    &QObject::destroyed,
-	    this,
-	    &BackgroundEffect::onWaylandWindowDestroyed
-	);
-
-	QObject::connect(
-	    this->mWaylandWindow,
-	    &QWaylandWindow::surfaceCreated,
-	    this,
-	    &BackgroundEffect::onWaylandSurfaceCreated
-	);
-
-	QObject::connect(
-	    this->mWaylandWindow,
-	    &QWaylandWindow::surfaceDestroyed,
-	    this,
-	    &BackgroundEffect::onWaylandSurfaceDestroyed
-	);
-
-	if (this->mWaylandWindow->surface()) {
-		this->onWaylandSurfaceCreated();
-	}
-}
-
-void BackgroundEffect::onWaylandWindowDestroyed() { this->mWaylandWindow = nullptr; }
-
-void BackgroundEffect::onWaylandSurfaceCreated() {
+void BackgroundEffect::waylandSurfaceCreated() {
 	auto* manager = impl::BackgroundEffectManager::instance();
 
 	if (!manager) {
@@ -199,12 +115,10 @@ void BackgroundEffect::onWaylandSurfaceCreated() {
 	}
 
 	// Steal protocol surface from previous BackgroundEffect to avoid duplicate-attachment on reload.
-	auto v = this->mWaylandWindow->property("qs_background_effect");
-	if (v.canConvert<BackgroundEffect*>()) {
-		auto* prev = v.value<BackgroundEffect*>();
-		if (prev != this && prev->surface) {
-			this->surface.swap(prev->surface);
-		}
+	if (auto* prev = this->previousAttachedObject("qs_background_effect", this);
+	    prev && prev->surface)
+	{
+		this->surface.swap(prev->surface);
 	}
 
 	if (!this->surface) {
@@ -213,15 +127,15 @@ void BackgroundEffect::onWaylandSurfaceCreated() {
 		);
 	}
 
-	this->mWaylandWindow->setProperty("qs_background_effect", QVariant::fromValue(this));
+	this->setAttachedObject("qs_background_effect", this);
 
 	this->pendingBlurRegion = this->mBlurRegion != nullptr;
 	if (this->pendingBlurRegion) {
-		this->proxyWindow->schedulePolish();
+		this->schedulePolish();
 	}
 }
 
-void BackgroundEffect::onWaylandSurfaceDestroyed() {
+void BackgroundEffect::waylandSurfaceDestroyed() {
 	this->surface = nullptr;
 	this->pendingBlurRegion = false;
 
@@ -230,13 +144,11 @@ void BackgroundEffect::onWaylandSurfaceDestroyed() {
 	}
 }
 
-void BackgroundEffect::onProxyWindowDestroyed() {
+void BackgroundEffect::proxyWindowDestroyed() {
 	// Don't delete the BackgroundEffect, and therefore the impl::BackgroundEffectSurface
 	// until the wl_surface is destroyed. Deleting it when the proxy window is deleted would
 	// cause a frame without blur between the destruction of the ext_background_effect_surface_v1
 	// and wl_surface objects.
-
-	this->proxyWindow = nullptr;
 
 	if (this->surface == nullptr) {
 		this->deleteLater();

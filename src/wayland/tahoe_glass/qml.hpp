@@ -14,6 +14,7 @@
 
 #include "../../core/region.hpp"
 #include "../../window/proxywindow.hpp"
+#include "../attached_surface_lifecycle.hpp"
 #include "surface.hpp"
 
 namespace qs::wayland::background_effect {
@@ -162,7 +163,7 @@ private:
 	};
 
 
-class TahoeGlass: public QObject {
+class TahoeGlass: public AttachedSurfaceLifecycle {
 	Q_OBJECT;
 	Q_PROPERTY(QQmlListProperty<TahoeGlassRegion> regions READ regions NOTIFY regionsChanged);
 	Q_PROPERTY(bool available READ available NOTIFY availableChanged);
@@ -181,20 +182,12 @@ public:
 
 	static TahoeGlass* qmlAttachedProperties(QObject* object);
 
-	bool eventFilter(QObject* object, QEvent* event) override;
-
 signals:
 	void regionsChanged();
 	void availableChanged();
 	void fallbackEnabledChanged();
 
 private slots:
-	void onWindowConnected();
-	void onWindowVisibleChanged();
-	void onWaylandWindowDestroyed();
-	void onWaylandSurfaceCreated();
-	void onWaylandSurfaceDestroyed();
-	void onProxyWindowDestroyed();
 	void onRegionDestroyed();
 	void updateRegions();
 	void onWindowPolished();
@@ -212,9 +205,13 @@ private:
 	void clearFallback();
 	void updateFallback(const QList<impl::TahoeGlassRegionState>& regions);
 
-	ProxyWindowBase* proxyWindow = nullptr;
-	QWindow* mWindow = nullptr;
-	QtWaylandClient::QWaylandWindow* mWaylandWindow = nullptr;
+	void backingWindowConnected() override;
+	void platformSurfaceAboutToBeDestroyed() override;
+	void waylandWindowDestroyed() override;
+	void waylandSurfaceCreated() override;
+	void waylandSurfaceDestroyed() override;
+	void proxyWindowDestroyed() override;
+	bool filteredWindowEvent(QObject* object, QEvent* event) override;
 
 	bool pendingRegions = false;
 	bool mAvailable = false;

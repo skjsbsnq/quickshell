@@ -11,6 +11,7 @@
 
 #include "../../core/region.hpp"
 #include "../../window/proxywindow.hpp"
+#include "../attached_surface_lifecycle.hpp"
 #include "surface.hpp"
 
 namespace qs::wayland::background_effect {
@@ -33,7 +34,7 @@ namespace qs::wayland::background_effect {
 ///   BackgroundEffect.blurRegion: Region { item: root.contentItem }
 /// }
 /// ```
-class BackgroundEffect: public QObject {
+class BackgroundEffect: public AttachedSurfaceLifecycle {
 	Q_OBJECT;
 	// clang-format off
 	/// Region to blur behind the surface. Set to null to remove blur.
@@ -51,26 +52,19 @@ public:
 
 	static BackgroundEffect* qmlAttachedProperties(QObject* object);
 
-	bool eventFilter(QObject* object, QEvent* event) override;
-
 signals:
 	void blurRegionChanged();
 
 private slots:
-	void onWindowConnected();
-	void onWindowVisibleChanged();
-	void onWaylandWindowDestroyed();
-	void onWaylandSurfaceCreated();
-	void onWaylandSurfaceDestroyed();
-	void onProxyWindowDestroyed();
 	void onBlurRegionDestroyed();
 	void onWindowPolished();
 	void updateBlurRegion();
 
 private:
-	ProxyWindowBase* proxyWindow = nullptr;
-	QWindow* mWindow = nullptr;
-	QtWaylandClient::QWaylandWindow* mWaylandWindow = nullptr;
+	void platformSurfaceAboutToBeDestroyed() override;
+	void waylandSurfaceCreated() override;
+	void waylandSurfaceDestroyed() override;
+	void proxyWindowDestroyed() override;
 
 	bool pendingBlurRegion = false;
 	PendingRegion* mBlurRegion = nullptr;
