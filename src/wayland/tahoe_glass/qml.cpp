@@ -365,6 +365,7 @@ void TahoeGlass::platformSurfaceAboutToBeDestroyed() {
 	this->surface = nullptr;
 	this->pendingRegions = false;
 	this->setAvailable(false);
+	this->clearFallback();
 }
 
 bool TahoeGlass::filteredWindowEvent(QObject* object, QEvent* event) {
@@ -390,11 +391,18 @@ void TahoeGlass::backingWindowConnected() {
 	QObject::connect(this->mWindow, &QWindow::heightChanged, this, &TahoeGlass::updateRegions);
 }
 
-void TahoeGlass::waylandWindowDestroyed() { this->setAvailable(false); }
+void TahoeGlass::waylandWindowDestroyed() {
+	this->setAvailable(false);
+	this->clearFallback();
+}
 
 void TahoeGlass::waylandSurfaceCreated() {
-	if (auto* prev = this->previousAttachedObject("qs_tahoe_glass", this); prev && prev->surface) {
+	auto* prev = this->previousAttachedObject("qs_tahoe_glass", this);
+
+	if (prev && prev->surface) {
 		this->surface.swap(prev->surface);
+		prev->pendingRegions = false;
+		prev->setAvailable(false);
 	}
 
 	if (!this->surface) {
@@ -405,16 +413,25 @@ void TahoeGlass::waylandSurfaceCreated() {
 		}
 	}
 
+	if (this->surface && prev) {
+		prev->clearFallback();
+	}
+
 	this->setAttachedObject("qs_tahoe_glass", this);
 	this->setAvailable(this->surface != nullptr);
 	this->pendingRegions = true;
 	this->schedulePolish();
+
+	if (prev && !prev->proxyWindow && (this->surface || !prev->fallbackEffect)) {
+		prev->deleteLater();
+	}
 }
 
 void TahoeGlass::waylandSurfaceDestroyed() {
 	this->surface = nullptr;
 	this->pendingRegions = false;
 	this->setAvailable(false);
+	this->clearFallback();
 
 	if (!this->proxyWindow) {
 		this->deleteLater();
@@ -422,9 +439,7 @@ void TahoeGlass::waylandSurfaceDestroyed() {
 }
 
 void TahoeGlass::proxyWindowDestroyed() {
-	this->fallbackEffect = nullptr;
-
-	if (this->surface == nullptr) {
+	if (this->surface == nullptr && this->fallbackEffect == nullptr) {
 		this->deleteLater();
 	}
 }
@@ -582,6 +597,10 @@ void TahoeGlass::updateFallback(const QList<impl::TahoeGlassRegionState>& region
 				this->fallbackEffect = nullptr;
 				delete this->fallbackRegion;
 				this->fallbackRegion = nullptr;
+
+				if (!this->proxyWindow && !this->surface) {
+					this->deleteLater();
+				}
 			});
 		}
 	}

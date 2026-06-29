@@ -59,10 +59,15 @@ protected:
 private:
 	void onWindowConnected();
 	void onWindowVisibleChanged();
+	void onBackingWindowDestroyed();
 	void onWaylandWindowDestroyed();
 	void onWaylandSurfaceCreated();
 	void onWaylandSurfaceDestroyed();
 	void onProxyWindowDestroyed();
+	void detachBackingWindow();
+	void detachWaylandWindow();
+
+	bool mHasWaylandSurface = false;
 };
 
 } // namespace qs::wayland

@@ -84,19 +84,32 @@ bool AttachedSurfaceLifecycle::filteredWindowEvent(QObject* /*object*/, QEvent* 
 void AttachedSurfaceLifecycle::onWindowConnected() {
 	if (!this->proxyWindow) return;
 
-	this->mWindow = this->proxyWindow->backingWindow();
-	if (!this->mWindow) return;
+	auto* window = this->proxyWindow->backingWindow();
+	if (!window) return;
 
-	this->mWindow->installEventFilter(this);
+	if (window != this->mWindow) {
+		this->detachBackingWindow();
 
-	QObject::connect(
-	    this->mWindow,
-	    &QWindow::visibleChanged,
-	    this,
-	    &AttachedSurfaceLifecycle::onWindowVisibleChanged
-	);
+		this->mWindow = window;
+		this->mWindow->installEventFilter(this);
 
-	this->backingWindowConnected();
+		QObject::connect(
+		    this->mWindow,
+		    &QObject::destroyed,
+		    this,
+		    &AttachedSurfaceLifecycle::onBackingWindowDestroyed
+		);
+
+		QObject::connect(
+		    this->mWindow,
+		    &QWindow::visibleChanged,
+		    this,
+		    &AttachedSurfaceLifecycle::onWindowVisibleChanged
+		);
+
+		this->backingWindowConnected();
+	}
+
 	this->onWindowVisibleChanged();
 }
 
@@ -112,10 +125,7 @@ void AttachedSurfaceLifecycle::onWindowVisibleChanged() {
 	auto* window = dynamic_cast<QWaylandWindow*>(this->mWindow->handle());
 	if (window == this->mWaylandWindow) return;
 
-	if (this->mWaylandWindow) {
-		QObject::disconnect(this->mWaylandWindow, nullptr, this, nullptr);
-	}
-
+	this->detachWaylandWindow();
 	this->mWaylandWindow = window;
 	if (!window) return;
 
@@ -145,18 +155,58 @@ void AttachedSurfaceLifecycle::onWindowVisibleChanged() {
 	}
 }
 
+void AttachedSurfaceLifecycle::onBackingWindowDestroyed() {
+	this->detachWaylandWindow();
+	this->mWindow = nullptr;
+}
+
 void AttachedSurfaceLifecycle::onWaylandWindowDestroyed() {
+	if (this->mHasWaylandSurface) {
+		this->mHasWaylandSurface = false;
+		this->waylandSurfaceDestroyed();
+	}
+
 	this->mWaylandWindow = nullptr;
 	this->waylandWindowDestroyed();
 }
 
-void AttachedSurfaceLifecycle::onWaylandSurfaceCreated() { this->waylandSurfaceCreated(); }
+void AttachedSurfaceLifecycle::onWaylandSurfaceCreated() {
+	if (this->mHasWaylandSurface) return;
+	this->mHasWaylandSurface = true;
+	this->waylandSurfaceCreated();
+}
 
-void AttachedSurfaceLifecycle::onWaylandSurfaceDestroyed() { this->waylandSurfaceDestroyed(); }
+void AttachedSurfaceLifecycle::onWaylandSurfaceDestroyed() {
+	if (!this->mHasWaylandSurface) return;
+	this->mHasWaylandSurface = false;
+	this->waylandSurfaceDestroyed();
+}
 
 void AttachedSurfaceLifecycle::onProxyWindowDestroyed() {
 	this->proxyWindow = nullptr;
 	this->proxyWindowDestroyed();
+}
+
+void AttachedSurfaceLifecycle::detachBackingWindow() {
+	if (!this->mWindow) return;
+
+	this->detachWaylandWindow();
+	this->mWindow->removeEventFilter(this);
+	QObject::disconnect(this->mWindow, nullptr, this, nullptr);
+	this->mWindow = nullptr;
+}
+
+void AttachedSurfaceLifecycle::detachWaylandWindow() {
+	if (!this->mWaylandWindow) return;
+
+	if (this->mHasWaylandSurface) {
+		this->mHasWaylandSurface = false;
+		this->waylandSurfaceDestroyed();
+	}
+
+	QObject::disconnect(this->mWaylandWindow, nullptr, this, nullptr);
+	this->mWaylandWindow = nullptr;
+	this->waylandWindowDestroyed();
 }
 
 } // namespace qs::wayland

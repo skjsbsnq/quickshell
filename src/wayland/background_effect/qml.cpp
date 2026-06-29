@@ -119,6 +119,11 @@ void BackgroundEffect::waylandSurfaceCreated() {
 	    prev && prev->surface)
 	{
 		this->surface.swap(prev->surface);
+		prev->pendingBlurRegion = false;
+
+		if (!prev->proxyWindow) {
+			prev->deleteLater();
+		}
 	}
 
 	if (!this->surface) {
