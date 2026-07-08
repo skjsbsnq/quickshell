@@ -12,6 +12,7 @@
 #include "../dbus/dbus_objectmanager_types.hpp"
 #include "../dbus/objectmanager.hpp"
 #include "adapter.hpp"
+#include "agent.hpp"
 #include "device.hpp"
 
 namespace qs::bluetooth {
@@ -62,6 +63,9 @@ void Bluez::init() {
 		qCDebug(logBluetooth) << "BlueZ is not running. Bluetooth integration will not work.";
 		return;
 	}
+
+	this->mAgent = new BluetoothAgent(this);
+	this->mAgent->registerAgent();
 }
 
 void Bluez::onInterfacesAdded(

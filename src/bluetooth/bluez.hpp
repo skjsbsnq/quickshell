@@ -15,6 +15,7 @@
 namespace qs::bluetooth {
 
 class BluetoothAdapter;
+class BluetoothAgent;
 class BluetoothDevice;
 
 class Bluez: public QObject {
@@ -27,6 +28,7 @@ public:
 	[[nodiscard]] BluetoothAdapter* adapter(const QString& path) {
 		return this->mAdapterMap.value(path);
 	}
+	[[nodiscard]] BluetoothAgent* agent() const { return this->mAgent; }
 
 	static Bluez* instance();
 
@@ -44,6 +46,7 @@ private:
 	void init();
 
 	qs::dbus::DBusObjectManager* objectManager = nullptr;
+	BluetoothAgent* mAgent = nullptr;
 	QHash<QString, BluetoothAdapter*> mAdapterMap;
 	QHash<QString, BluetoothDevice*> mDeviceMap;
 	ObjectModel<BluetoothAdapter> mAdapters {this};

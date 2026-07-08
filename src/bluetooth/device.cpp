@@ -14,6 +14,7 @@
 #include "../core/logcat.hpp"
 #include "../dbus/properties.hpp"
 #include "adapter.hpp"
+#include "agent.hpp"
 #include "bluez.hpp"
 #include "dbus_device.h"
 
@@ -98,6 +99,9 @@ void BluetoothDevice::connect() {
 
 	qCDebug(logDevice) << "Connecting to device" << this;
 	this->bState = BluetoothDeviceState::Connecting;
+	if (auto* agent = Bluez::instance()->agent()) {
+		agent->prepareDevice(this->path());
+	}
 
 	auto reply = this->mInterface->Connect();
 	auto* watcher = new QDBusPendingCallWatcher(reply, this);
@@ -176,6 +180,12 @@ void BluetoothDevice::pair() {
 
 	qCDebug(logDevice) << "Pairing with device" << this;
 	this->bPairing = true;
+	if (auto* agent = Bluez::instance()->agent()) {
+		agent->prepareDevice(this->path());
+	}
+	if (auto* adapter = this->adapter(); adapter && adapter->discovering()) {
+		adapter->stopDiscovery();
+	}
 
 	auto reply = this->mInterface->Pair();
 	auto* watcher = new QDBusPendingCallWatcher(reply, this);
@@ -190,7 +200,13 @@ void BluetoothDevice::pair() {
 			    qCWarning(logDevice).nospace()
 			        << "Failed to pair with device " << this << ": " << reply.error().message();
 		    } else {
-			    qCDebug(logDevice) << "Successfully initiated pairing with device" << this;
+			    qCDebug(logDevice) << "Successfully paired with device" << this;
+			    if (!this->bTrusted) {
+				    this->setTrusted(true);
+			    }
+			    if (!this->bConnected && !this->bBlocked) {
+				    this->connect();
+			    }
 		    }
 
 		    this->bPairing = false;

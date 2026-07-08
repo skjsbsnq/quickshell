@@ -6,6 +6,18 @@ set_source_files_properties(org.bluez.Device.xml PROPERTIES
 	CLASSNAME DBusBluezDeviceInterface
 )
 
+set_source_files_properties(org.bluez.AgentManager.xml PROPERTIES
+	CLASSNAME DBusBluezAgentManagerInterface
+)
+
+qt_add_dbus_adaptor(DBUS_INTERFACES
+	org.bluez.Agent.xml
+	agent.hpp
+	qs::bluetooth::BluetoothAgent
+	dbus_agent
+	DBusBluezAgentAdaptor
+)
+
 qt_add_dbus_interface(DBUS_INTERFACES
 	org.bluez.Adapter.xml
 	dbus_adapter
@@ -16,7 +28,13 @@ qt_add_dbus_interface(DBUS_INTERFACES
 	dbus_device
 )
 
+qt_add_dbus_interface(DBUS_INTERFACES
+	org.bluez.AgentManager.xml
+	dbus_agentmanager
+)
+
 qt_add_library(quickshell-bluetooth STATIC
+	agent.cpp
 	adapter.cpp
 	bluez.cpp
 	device.cpp
