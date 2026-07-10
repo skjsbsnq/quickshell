@@ -8,6 +8,7 @@
 #include <qpixmap.h>
 #include <qsize.h>
 #include <qstring.h>
+#include <QMutex>
 
 QPixmap
 IconImageProvider::requestPixmap(const QString& id, QSize* size, const QSize& requestedSize) {
@@ -36,6 +37,14 @@ IconImageProvider::requestPixmap(const QString& id, QSize* size, const QSize& re
 
 	auto targetSize = requestedSize.isValid() ? requestedSize : QSize(100, 100);
 	if (targetSize.width() == 0 || targetSize.height() == 0) targetSize = QSize(2, 2);
+
+	// QIcon::fromTheme()/QIcon::pixmap() are not thread-safe, but this provider
+	// is invoked from Qt's QQuickPixmapReader worker thread. Concurrent icon
+	// loads race on the shared QIconLoader/theme engine and hit a pure-virtual
+	// call in QPlatformPixmap::fromFile -> SIGABRT. Serialise the lookup+render
+	// under a global mutex so only one thread touches the icon engine at a time.
+	static QMutex iconMutex;
+	QMutexLocker locker(&iconMutex);
 	auto pixmap = icon.pixmap(targetSize.width(), targetSize.height());
 
 	if (pixmap.isNull()) {
