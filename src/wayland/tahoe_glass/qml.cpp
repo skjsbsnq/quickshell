@@ -250,7 +250,9 @@ void TahoeGlassRegion::setEnabled(bool enabled) {
 qreal TahoeGlassRegion::interaction() const { return this->mInteraction; }
 
 void TahoeGlassRegion::setInteraction(qreal interaction) {
-	auto clamped = qBound(0.0, interaction, 1.0);
+	// Quantize to 1/50 so spring/opacity residual noise does not republish
+	// regions every frame (session.log: ~60Hz clear/set on Dock/island).
+	auto clamped = std::round(qBound(0.0, interaction, 1.0) * 50.0) / 50.0;
 	if (qFuzzyCompare(clamped, this->mInteraction)) return;
 	this->mInteraction = clamped;
 	emit this->interactionChanged();
@@ -259,7 +261,7 @@ void TahoeGlassRegion::setInteraction(qreal interaction) {
 qreal TahoeGlassRegion::materialAlpha() const { return this->mMaterialAlpha; }
 
 void TahoeGlassRegion::setMaterialAlpha(qreal materialAlpha) {
-	auto clamped = qBound(0.0, materialAlpha, 1.0);
+	auto clamped = std::round(qBound(0.0, materialAlpha, 1.0) * 50.0) / 50.0;
 	if (qFuzzyCompare(clamped, this->mMaterialAlpha)) return;
 	this->mMaterialAlpha = clamped;
 	emit this->materialAlphaChanged();
