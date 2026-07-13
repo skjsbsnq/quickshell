@@ -730,12 +730,20 @@ void TahoeGlass::updateFallback(const QList<impl::TahoeGlassRegionState>& region
 
 	if (!this->fallbackEffect) return;
 
+	// BackgroundEffect blurRegion is binary: present or not. There is no
+	// opacity/strength API and the public protocol does not expose blur
+	// intensity either. Fallback therefore uses a binary visibility rule on
+	// the already-quantized materialAlpha (1/50 steps from setMaterialAlpha):
+	//   materialAlpha > 0 && blur flag  → include in fallback blur region
+	//   materialAlpha == 0              → exclude (no residual full-strength blur)
+	// When no region qualifies, clear the blur region in this same update.
 	auto* root = new PendingRegion(this);
 	auto prop = root->regions();
 	auto fallbackCount = 0;
 
 	for (const auto& region: regions) {
-		if ((region.flags & 1) == 0) continue;
+		const bool blur = (region.flags & 1) != 0;
+		if (!blur || region.materialAlpha <= 0.0) continue;
 
 		auto* child = new PendingRegion(root);
 		child->setProperty("x", region.rect.x());
