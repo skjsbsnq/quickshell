@@ -4,6 +4,7 @@
 #include <cmath>
 #include <memory>
 
+#include <private/qquickitem_p.h>
 #include <private/qwaylandwindow_p.h>
 #include <qcoreevent.h>
 #include <qevent.h>
@@ -62,6 +63,12 @@ TahoeGlassRegion::TahoeGlassRegion(QObject* parent): QObject(parent), mRegionId(
 	QObject::connect(this, &TahoeGlassRegion::materialAlphaChanged, this, &TahoeGlassRegion::changed);
 }
 
+TahoeGlassRegion::~TahoeGlassRegion() {
+	// Change listeners must be removed before this object is fully destroyed;
+	// QObject auto-disconnect does not cover QQuickItemChangeListener.
+	this->unlinkTrackedItems();
+}
+
 quint32 TahoeGlassRegion::regionId() const { return this->mRegionId; }
 
 void TahoeGlassRegion::setRegionId(quint32 id) {
@@ -75,19 +82,11 @@ QQuickItem* TahoeGlassRegion::item() const { return this->mItem; }
 void TahoeGlassRegion::setItem(QQuickItem* item) {
 	if (item == this->mItem) return;
 
-	if (this->mItem != nullptr) {
-		QObject::disconnect(this->mItem, nullptr, this, nullptr);
-	}
-
+	this->unlinkTrackedItems();
 	this->mItem = item;
 
 	if (item != nullptr) {
-		QObject::connect(item, &QObject::destroyed, this, &TahoeGlassRegion::onItemDestroyed);
-		QObject::connect(item, &QQuickItem::xChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
-		QObject::connect(item, &QQuickItem::yChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
-		QObject::connect(item, &QQuickItem::widthChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
-		QObject::connect(item, &QQuickItem::heightChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
-		QObject::connect(item, &QQuickItem::visibleChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
+		this->linkTrackedItems(item);
 	}
 
 	emit this->itemChanged();
@@ -284,12 +283,137 @@ bool TahoeGlassRegion::buildSurfaceRegion(
 	return true;
 }
 
-void TahoeGlassRegion::onItemDestroyed() {
-	this->mItem = nullptr;
-	emit this->itemChanged();
+void TahoeGlassRegion::unlinkTrackedItems(QObject* dying) {
+	for (auto* tracked: this->mTrackedItems) {
+		if (tracked == nullptr) continue;
+
+		// Pointer identity only — never qobject_cast in destroy paths
+		// (metaObject is already QObject when destroyed fires).
+		if (static_cast<QObject*>(tracked) == dying) {
+			// Mid-destruction: QObject connections auto-drop; change listeners
+			// are torn down with the item. Do not touch QQuickItemPrivate.
+			continue;
+		}
+
+		QObject::disconnect(tracked, nullptr, this, nullptr);
+		// Matrix listener is not a QObject connection; remove explicitly.
+		QQuickItemPrivate::get(tracked)->removeItemChangeListener(this, QQuickItemPrivate::Matrix);
+	}
+
+	this->mTrackedItems.clear();
+}
+
+void TahoeGlassRegion::linkTrackedItem(QQuickItem* item) {
+	if (item == nullptr) return;
+
+	// Geometry of the item itself (public NOTIFY signals).
+	QObject::connect(item, &QQuickItem::xChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
+	QObject::connect(item, &QQuickItem::yChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
+	QObject::connect(item, &QQuickItem::widthChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
+	QObject::connect(item, &QQuickItem::heightChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
+	QObject::connect(item, &QQuickItem::scaleChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
+	QObject::connect(item, &QQuickItem::rotationChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
+	QObject::connect(
+	    item,
+	    &QQuickItem::transformOriginChanged,
+	    this,
+	    &TahoeGlassRegion::onItemGeometryChanged
+	);
+	// isVisible() is effective (ancestors included); still listen so a visible
+	// toggle on any ancestor schedules a region rebuild.
+	QObject::connect(item, &QQuickItem::visibleChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
+	// Parent/window changes require rewiring the ancestor chain.
+	QObject::connect(item, &QQuickItem::parentChanged, this, &TahoeGlassRegion::onItemAncestryChanged);
+	QObject::connect(item, &QQuickItem::windowChanged, this, &TahoeGlassRegion::onItemAncestryChanged);
+	// Match TransformWatcher: identity via sender() pointer, no qobject_cast.
+	QObject::connect(item, &QObject::destroyed, this, &TahoeGlassRegion::onTrackedItemDestroyed);
+
+	// QML `transform: Translate/Scale/Rotation { ... }` has no public NOTIFY on
+	// the item; Matrix change listeners fire itemTransformChanged when those
+	// matrices update (including list append/clear).
+	QQuickItemPrivate::get(item)->addItemChangeListener(this, QQuickItemPrivate::Matrix);
+
+	this->mTrackedItems.append(item);
+}
+
+void TahoeGlassRegion::linkTrackedItems(QQuickItem* item, QObject* skipItem) {
+	this->unlinkTrackedItems(skipItem);
+	if (item == nullptr) return;
+
+	// Track the item and every ancestor so parent scale/rotation/origin/move/
+	// transform-list updates glass geometry without per-frame polling.
+	// Never call parentItem() on skipItem — only compare addresses.
+	for (auto* current = item; current != nullptr; current = current->parentItem()) {
+		if (static_cast<QObject*>(current) == skipItem) continue;
+		this->linkTrackedItem(current);
+	}
 }
 
 void TahoeGlassRegion::onItemGeometryChanged() { emit this->changed(); }
+
+void TahoeGlassRegion::onItemAncestryChanged() {
+	if (this->mItem == nullptr) return;
+	this->linkTrackedItems(this->mItem);
+	emit this->changed();
+}
+
+void TahoeGlassRegion::onTrackedItemDestroyed() {
+	// Use raw sender() pointer identity only. qobject_cast fails once ~QQuickItem
+	// has finished and metaObject has decayed to QObject (same rule as
+	// TransformWatcher::itemDestroyed).
+	QObject* destroyed = this->sender();
+	if (destroyed == nullptr) return;
+
+	if (destroyed == static_cast<QObject*>(this->mItem)) {
+		this->mItem = nullptr;
+		this->unlinkTrackedItems(destroyed);
+		emit this->itemChanged();
+		return;
+	}
+
+	// Ancestor destroyed: rewire living chain, skipping the dying object.
+	if (this->mItem != nullptr) {
+		this->linkTrackedItems(this->mItem, destroyed);
+	} else {
+		this->unlinkTrackedItems(destroyed);
+	}
+
+	emit this->changed();
+}
+
+void TahoeGlassRegion::itemTransformChanged(QQuickItem* /*item*/, QQuickItem* /*transformedItem*/) {
+	// Matrix / transform-list update on a tracked item or its ancestor.
+	this->onItemGeometryChanged();
+}
+
+QRectF TahoeGlassRegion::itemSceneBounds(const QQuickItem* item) {
+	if (item == nullptr) return {};
+
+	const auto width = item->width();
+	const auto height = item->height();
+	// Four corners, not a single diagonal: rotation/scale with a non-center
+	// transform origin would otherwise under-estimate the axis-aligned box.
+	const QPointF corners[4] = {
+	    item->mapToScene(QPointF(0, 0)),
+	    item->mapToScene(QPointF(width, 0)),
+	    item->mapToScene(QPointF(0, height)),
+	    item->mapToScene(QPointF(width, height)),
+	};
+
+	auto left = corners[0].x();
+	auto top = corners[0].y();
+	auto right = corners[0].x();
+	auto bottom = corners[0].y();
+
+	for (int i = 1; i < 4; ++i) {
+		left = std::min(left, corners[i].x());
+		top = std::min(top, corners[i].y());
+		right = std::max(right, corners[i].x());
+		bottom = std::max(bottom, corners[i].y());
+	}
+
+	return QRectF(QPointF(left, top), QPointF(right, bottom));
+}
 
 bool TahoeGlassRegion::buildRegion(impl::TahoeGlassRegionState* state) const {
 	if (!state || !this->mEnabled) return false;
@@ -297,10 +421,7 @@ bool TahoeGlassRegion::buildRegion(impl::TahoeGlassRegionState* state) const {
 	QRectF rect;
 	if (this->mItem != nullptr) {
 		if (!this->mItem->isVisible()) return false;
-
-		auto origin = this->mItem->mapToScene(QPointF(0, 0));
-		auto extent = this->mItem->mapToScene(QPointF(this->mItem->width(), this->mItem->height()));
-		rect = QRectF(origin, extent).normalized();
+		rect = itemSceneBounds(this->mItem);
 	} else {
 		rect = QRectF(this->mX, this->mY, this->mWidth, this->mHeight).normalized();
 	}

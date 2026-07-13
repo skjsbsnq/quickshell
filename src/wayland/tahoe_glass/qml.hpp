@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include <private/qquickitemchangelistener_p.h>
 #include <private/qwaylandwindow_p.h>
 #include <qcoreevent.h>
 #include <qobject.h>
@@ -23,7 +24,12 @@ class BackgroundEffect;
 
 namespace qs::wayland::tahoe_glass {
 
-class TahoeGlassRegion: public QObject {
+// QQuickItemChangeListener covers transform-list (Matrix) updates that have no
+// public NOTIFY signal; deliberately specialized for scene AABB, not a second
+// TransformWatcher.
+class TahoeGlassRegion
+    : public QObject
+    , public QQuickItemChangeListener {
 	Q_OBJECT;
 	// clang-format off
 	Q_PROPERTY(quint32 regionId READ regionId WRITE setRegionId NOTIFY regionIdChanged);
@@ -41,15 +47,16 @@ class TahoeGlassRegion: public QObject {
 	Q_PROPERTY(bool blur READ blur WRITE setBlur NOTIFY blurChanged);
 	Q_PROPERTY(bool shadow READ shadow WRITE setShadow NOTIFY shadowChanged);
 	Q_PROPERTY(bool clip READ clip WRITE setClip NOTIFY clipChanged);
-		Q_PROPERTY(bool enabled READ enabled WRITE setEnabled NOTIFY enabledChanged);
-		Q_PROPERTY(qreal interaction READ interaction WRITE setInteraction NOTIFY interactionChanged);
-		Q_PROPERTY(qreal materialAlpha READ materialAlpha WRITE setMaterialAlpha NOTIFY materialAlphaChanged);
-		// clang-format on
+	Q_PROPERTY(bool enabled READ enabled WRITE setEnabled NOTIFY enabledChanged);
+	Q_PROPERTY(qreal interaction READ interaction WRITE setInteraction NOTIFY interactionChanged);
+	Q_PROPERTY(qreal materialAlpha READ materialAlpha WRITE setMaterialAlpha NOTIFY materialAlphaChanged);
+	// clang-format on
 
 	QML_ELEMENT;
 
 public:
 	explicit TahoeGlassRegion(QObject* parent = nullptr);
+	~TahoeGlassRegion() override;
 
 	[[nodiscard]] quint32 regionId() const;
 	void setRegionId(quint32 id);
@@ -105,6 +112,11 @@ public:
 	    impl::TahoeGlassRegionState* state
 	) const;
 
+	/// Axis-aligned scene bounds of an item after full scene transform.
+	/// Maps all four local corners (not only the diagonal) so rotation/scale
+	/// with non-default transform origins produce a correct AABB.
+	[[nodiscard]] static QRectF itemSceneBounds(const QQuickItem* item);
+
 signals:
 	void regionIdChanged();
 	void itemChanged();
@@ -121,15 +133,15 @@ signals:
 	void blurChanged();
 	void shadowChanged();
 	void clipChanged();
-		void enabledChanged();
-		void interactionChanged();
-		void materialAlphaChanged();
-		void changed();
-
+	void enabledChanged();
+	void interactionChanged();
+	void materialAlphaChanged();
+	void changed();
 
 private slots:
-	void onItemDestroyed();
 	void onItemGeometryChanged();
+	void onItemAncestryChanged();
+	void onTrackedItemDestroyed();
 
 private:
 	enum CornerOverride : quint8 {
@@ -139,10 +151,21 @@ private:
 		BottomRight = 0b1000,
 	};
 
+	// QQuickItemChangeListener: transform: [...] list / matrix updates.
+	// Destroy cleanup is solely via QObject::destroyed (pointer identity),
+	// not ChangeListener::itemDestroyed — only Matrix is registered.
+	void itemTransformChanged(QQuickItem* item, QQuickItem* transformedItem) override;
+
 	[[nodiscard]] bool buildRegion(impl::TahoeGlassRegionState* state) const;
+	/// Unlink all tracked items. If `dying` is set, skip QQuickItemPrivate
+	/// access on that object (it is mid-destruction; listeners die with it).
+	void unlinkTrackedItems(QObject* dying = nullptr);
+	void linkTrackedItems(QQuickItem* item, QObject* skipItem = nullptr);
+	void linkTrackedItem(QQuickItem* item);
 
 	quint32 mRegionId = 0;
 	QQuickItem* mItem = nullptr;
+	QList<QQuickItem*> mTrackedItems;
 	qint32 mX = 0;
 	qint32 mY = 0;
 	qint32 mWidth = 0;
@@ -156,11 +179,11 @@ private:
 	quint8 mCornerOverrides = 0;
 	bool mBlur = true;
 	bool mShadow = true;
-		bool mClip = true;
-		bool mEnabled = true;
-		qreal mInteraction = 0.0;
-		qreal mMaterialAlpha = 1.0;
-	};
+	bool mClip = true;
+	bool mEnabled = true;
+	qreal mInteraction = 0.0;
+	qreal mMaterialAlpha = 1.0;
+};
 
 
 class TahoeGlass: public AttachedSurfaceLifecycle {

@@ -15,7 +15,7 @@ install_qml_module(quickshell-wayland-tahoe-glass)
 wl_proto(wlp-tahoe-glass tahoe-glass-v1 "${CMAKE_CURRENT_SOURCE_DIR}")
 
 target_link_libraries(quickshell-wayland-tahoe-glass PRIVATE
-	Qt::Quick Qt::WaylandClient Qt::WaylandClientPrivate wayland-client
+	Qt::Quick Qt::QuickPrivate Qt::WaylandClient Qt::WaylandClientPrivate wayland-client
 	quickshell-wayland-attached-surface-lifecycle
 	quickshell-wayland-background-effect
 	wlp-tahoe-glass
