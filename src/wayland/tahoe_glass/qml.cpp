@@ -1,5 +1,4 @@
 #include "qml.hpp"
-
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -52,9 +51,24 @@ TahoeGlassRegion::TahoeGlassRegion(QObject* parent): QObject(parent), mRegionId(
 	QObject::connect(this, &TahoeGlassRegion::materialChanged, this, &TahoeGlassRegion::changed);
 	QObject::connect(this, &TahoeGlassRegion::radiusChanged, this, &TahoeGlassRegion::changed);
 	QObject::connect(this, &TahoeGlassRegion::topLeftRadiusChanged, this, &TahoeGlassRegion::changed);
-	QObject::connect(this, &TahoeGlassRegion::topRightRadiusChanged, this, &TahoeGlassRegion::changed);
-	QObject::connect(this, &TahoeGlassRegion::bottomLeftRadiusChanged, this, &TahoeGlassRegion::changed);
-	QObject::connect(this, &TahoeGlassRegion::bottomRightRadiusChanged, this, &TahoeGlassRegion::changed);
+	QObject::connect(
+	    this,
+	    &TahoeGlassRegion::topRightRadiusChanged,
+	    this,
+	    &TahoeGlassRegion::changed
+	);
+	QObject::connect(
+	    this,
+	    &TahoeGlassRegion::bottomLeftRadiusChanged,
+	    this,
+	    &TahoeGlassRegion::changed
+	);
+	QObject::connect(
+	    this,
+	    &TahoeGlassRegion::bottomRightRadiusChanged,
+	    this,
+	    &TahoeGlassRegion::changed
+	);
 	QObject::connect(this, &TahoeGlassRegion::blurChanged, this, &TahoeGlassRegion::changed);
 	QObject::connect(this, &TahoeGlassRegion::shadowChanged, this, &TahoeGlassRegion::changed);
 	QObject::connect(this, &TahoeGlassRegion::clipChanged, this, &TahoeGlassRegion::changed);
@@ -310,9 +324,19 @@ void TahoeGlassRegion::linkTrackedItem(QQuickItem* item) {
 	QObject::connect(item, &QQuickItem::xChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
 	QObject::connect(item, &QQuickItem::yChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
 	QObject::connect(item, &QQuickItem::widthChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
-	QObject::connect(item, &QQuickItem::heightChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
+	QObject::connect(
+	    item,
+	    &QQuickItem::heightChanged,
+	    this,
+	    &TahoeGlassRegion::onItemGeometryChanged
+	);
 	QObject::connect(item, &QQuickItem::scaleChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
-	QObject::connect(item, &QQuickItem::rotationChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
+	QObject::connect(
+	    item,
+	    &QQuickItem::rotationChanged,
+	    this,
+	    &TahoeGlassRegion::onItemGeometryChanged
+	);
 	QObject::connect(
 	    item,
 	    &QQuickItem::transformOriginChanged,
@@ -321,10 +345,25 @@ void TahoeGlassRegion::linkTrackedItem(QQuickItem* item) {
 	);
 	// isVisible() is effective (ancestors included); still listen so a visible
 	// toggle on any ancestor schedules a region rebuild.
-	QObject::connect(item, &QQuickItem::visibleChanged, this, &TahoeGlassRegion::onItemGeometryChanged);
+	QObject::connect(
+	    item,
+	    &QQuickItem::visibleChanged,
+	    this,
+	    &TahoeGlassRegion::onItemGeometryChanged
+	);
 	// Parent/window changes require rewiring the ancestor chain.
-	QObject::connect(item, &QQuickItem::parentChanged, this, &TahoeGlassRegion::onItemAncestryChanged);
-	QObject::connect(item, &QQuickItem::windowChanged, this, &TahoeGlassRegion::onItemAncestryChanged);
+	QObject::connect(
+	    item,
+	    &QQuickItem::parentChanged,
+	    this,
+	    &TahoeGlassRegion::onItemAncestryChanged
+	);
+	QObject::connect(
+	    item,
+	    &QQuickItem::windowChanged,
+	    this,
+	    &TahoeGlassRegion::onItemAncestryChanged
+	);
 	// Match TransformWatcher: identity via sender() pointer, no qobject_cast.
 	QObject::connect(item, &QObject::destroyed, this, &TahoeGlassRegion::onTrackedItemDestroyed);
 
@@ -458,7 +497,12 @@ TahoeGlass* TahoeGlass::qmlAttachedProperties(QObject* object) {
 
 TahoeGlass::TahoeGlass(ProxyWindowBase* window): AttachedSurfaceLifecycle(window) {
 	QObject::connect(window, &ProxyWindowBase::polished, this, &TahoeGlass::onWindowPolished);
-	QObject::connect(window, &ProxyWindowBase::devicePixelRatioChanged, this, &TahoeGlass::updateRegions);
+	QObject::connect(
+	    window,
+	    &ProxyWindowBase::devicePixelRatioChanged,
+	    this,
+	    &TahoeGlass::updateRegions
+	);
 	this->initializeLifecycle();
 }
 
@@ -706,6 +750,37 @@ void TahoeGlass::clearFallback() {
 	delete this->fallbackRegion;
 	this->fallbackRegion = nullptr;
 }
+
+#ifdef QS_TEST
+void TahoeGlass::updateFallbackForTest(const QList<impl::TahoeGlassRegionState>& regions) {
+	this->updateFallback(regions);
+}
+
+void TahoeGlass::clearFallbackForTest() { this->clearFallback(); }
+
+void TahoeGlass::routeRegionsAfterPolishForTest(
+    const QList<impl::TahoeGlassRegionState>& logicalRegions,
+    bool protocolSurfacePresent
+) {
+	// Same branch structure as onWindowPolished once surfaceRegions are built:
+	// protocol surface present → clear fallback; absent → rebuild from logical.
+	if (protocolSurfacePresent) {
+		this->setAvailable(true);
+		this->clearFallback();
+	} else {
+		this->setAvailable(false);
+		this->updateFallback(logicalRegions);
+	}
+}
+
+PendingRegion* TahoeGlass::fallbackRegionForTest() const { return this->fallbackRegion; }
+
+QObject* TahoeGlass::fallbackEffectObjectForTest() const { return this->fallbackEffect; }
+
+PendingRegion* TahoeGlass::fallbackEffectBlurRegionForTest() const {
+	return this->fallbackEffect ? this->fallbackEffect->blurRegion() : nullptr;
+}
+#endif
 
 void TahoeGlass::updateFallback(const QList<impl::TahoeGlassRegionState>& regions) {
 	if (!this->mFallbackEnabled || !this->proxyWindow) {

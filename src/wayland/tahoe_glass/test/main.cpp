@@ -1,6 +1,7 @@
 #include <qguiapplication.h>
 #include <qtest.h>
 
+#include "fallback_alpha.hpp"
 #include "region_diff.hpp"
 #include "transform_lifecycle.hpp"
 
@@ -14,6 +15,10 @@ int main(int argc, char** argv) {
 	}
 	{
 		TestTransformLifecycle tc;
+		status |= QTest::qExec(&tc, argc, argv);
+	}
+	{
+		TestFallbackAlpha tc;
 		status |= QTest::qExec(&tc, argc, argv);
 	}
 	return status;

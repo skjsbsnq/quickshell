@@ -4,6 +4,7 @@
 
 #ifdef QS_TEST
 class TestTransformLifecycle;
+class TestFallbackAlpha;
 #endif
 
 #include <private/qquickitemchangelistener_p.h>
@@ -104,12 +105,12 @@ public:
 	[[nodiscard]] bool enabled() const;
 	void setEnabled(bool enabled);
 
-		[[nodiscard]] qreal interaction() const;
-		void setInteraction(qreal interaction);
-		[[nodiscard]] qreal materialAlpha() const;
-		void setMaterialAlpha(qreal materialAlpha);
+	[[nodiscard]] qreal interaction() const;
+	void setInteraction(qreal interaction);
+	[[nodiscard]] qreal materialAlpha() const;
+	void setMaterialAlpha(qreal materialAlpha);
 
-		[[nodiscard]] bool buildLogicalRegion(impl::TahoeGlassRegionState* state) const;
+	[[nodiscard]] bool buildLogicalRegion(impl::TahoeGlassRegionState* state) const;
 
 	[[nodiscard]] bool buildSurfaceRegion(
 	    QtWaylandClient::QWaylandWindow* waylandWindow,
@@ -198,12 +199,14 @@ private:
 	qreal mMaterialAlpha = 1.0;
 };
 
-
 class TahoeGlass: public AttachedSurfaceLifecycle {
 	Q_OBJECT;
 	Q_PROPERTY(QQmlListProperty<TahoeGlassRegion> regions READ regions NOTIFY regionsChanged);
 	Q_PROPERTY(bool available READ available NOTIFY availableChanged);
-	Q_PROPERTY(bool fallbackEnabled READ fallbackEnabled WRITE setFallbackEnabled NOTIFY fallbackEnabledChanged);
+	Q_PROPERTY(
+	    bool fallbackEnabled READ fallbackEnabled WRITE setFallbackEnabled NOTIFY
+	        fallbackEnabledChanged
+	);
 	QML_ELEMENT;
 	QML_UNCREATABLE("TahoeGlass can only be used as an attached object.");
 	QML_ATTACHED(TahoeGlass);
@@ -240,6 +243,23 @@ private:
 	void setAvailable(bool available);
 	void clearFallback();
 	void updateFallback(const QList<impl::TahoeGlassRegionState>& regions);
+
+#ifdef QS_TEST
+	// Task 20: test-only observation of the fallback owner (not QML-facing).
+	// Implementations live in qml.cpp where BackgroundEffect is complete.
+	friend class ::TestFallbackAlpha;
+	void updateFallbackForTest(const QList<impl::TahoeGlassRegionState>& regions);
+	void clearFallbackForTest();
+	/// Mirror onWindowPolished routing: protocol present → clearFallback;
+	/// absent → updateFallback. Does not require a real Wayland surface object.
+	void routeRegionsAfterPolishForTest(
+	    const QList<impl::TahoeGlassRegionState>& logicalRegions,
+	    bool protocolSurfacePresent
+	);
+	[[nodiscard]] PendingRegion* fallbackRegionForTest() const;
+	[[nodiscard]] QObject* fallbackEffectObjectForTest() const;
+	[[nodiscard]] PendingRegion* fallbackEffectBlurRegionForTest() const;
+#endif
 
 	void backingWindowConnected() override;
 	void platformSurfaceAboutToBeDestroyed() override;
