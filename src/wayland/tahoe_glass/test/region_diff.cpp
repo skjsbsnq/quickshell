@@ -230,4 +230,4 @@ void TestRegionDiff::eachIdAtMostOneSetOrRemove() {
 	}
 }
 
-QTEST_MAIN(TestRegionDiff);
+// QTEST_MAIN lives in main.cpp so Task 13/20 can share one executable.

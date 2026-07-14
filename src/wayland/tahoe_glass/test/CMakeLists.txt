@@ -2,10 +2,15 @@ function (qs_test name)
 	add_executable(${name} ${ARGN})
 	target_link_libraries(${name} PRIVATE
 		Qt::Quick
+		Qt::QuickPrivate
 		Qt::Test
 		Qt::WaylandClient
 		Qt::WaylandClientPrivate
 		quickshell-wayland-tahoe-glass
+		quickshell-window
+		quickshell-core
+		quickshell-ui
+		quickshell-io
 		wlp-tahoe-glass
 	)
 	target_include_directories(${name} PRIVATE
@@ -17,4 +22,5 @@ function (qs_test name)
 endfunction()
 
 # Unique shared harness for Task 06/13/20 Tahoe glass behavioral tests.
-qs_test(tahoe-glass-tests region_diff.cpp)
+# Single executable; Task 13 adds transform lifecycle sources (no second harness).
+qs_test(tahoe-glass-tests main.cpp region_diff.cpp transform_lifecycle.cpp)

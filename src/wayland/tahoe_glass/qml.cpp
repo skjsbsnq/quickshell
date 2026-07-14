@@ -342,10 +342,13 @@ void TahoeGlassRegion::linkTrackedItems(QQuickItem* item, QObject* skipItem) {
 
 	// Track the item and every ancestor so parent scale/rotation/origin/move/
 	// transform-list updates glass geometry without per-frame polling.
-	// Never call parentItem() on skipItem — only compare addresses.
-	for (auto* current = item; current != nullptr; current = current->parentItem()) {
-		if (static_cast<QObject*>(current) == skipItem) continue;
+	// Never call parentItem() (or any QQuickItem method) on skipItem: the for-
+	// increment would otherwise run on a dying ancestor. Stop the walk at
+	// skipItem by testing before link and before ascending.
+	for (auto* current = item; current != nullptr;) {
+		if (static_cast<QObject*>(current) == skipItem) break;
 		this->linkTrackedItem(current);
+		current = current->parentItem();
 	}
 }
 

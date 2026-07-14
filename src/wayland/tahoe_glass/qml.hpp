@@ -2,6 +2,10 @@
 
 #include <memory>
 
+#ifdef QS_TEST
+class TestTransformLifecycle;
+#endif
+
 #include <private/qquickitemchangelistener_p.h>
 #include <private/qwaylandwindow_p.h>
 #include <qcoreevent.h>
@@ -162,6 +166,15 @@ private:
 	void unlinkTrackedItems(QObject* dying = nullptr);
 	void linkTrackedItems(QQuickItem* item, QObject* skipItem = nullptr);
 	void linkTrackedItem(QQuickItem* item);
+
+#ifdef QS_TEST
+	// Test-only observation seam (not QML-facing). Production builds omit this.
+	friend class ::TestTransformLifecycle;
+	[[nodiscard]] QList<QQuickItem*> trackedItemsForTest() const { return this->mTrackedItems; }
+	void linkTrackedItemsForTest(QQuickItem* item, QObject* skipItem) {
+		this->linkTrackedItems(item, skipItem);
+	}
+#endif
 
 	quint32 mRegionId = 0;
 	QQuickItem* mItem = nullptr;
