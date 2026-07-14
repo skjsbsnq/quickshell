@@ -29,6 +29,17 @@ void SystemClock::setPrecision(SystemClock::Enum precision) {
 	this->update();
 }
 
+void SystemClock::resync() {
+	// Explicit wall-clock sample: always refresh date immediately.
+	// Timer is only (re)armed when enabled.
+	this->setTime(QDateTime::fromMSecsSinceEpoch(0));
+	if (this->mEnabled) {
+		this->schedule(QDateTime::fromMSecsSinceEpoch(0));
+	} else {
+		this->timer.stop();
+	}
+}
+
 void SystemClock::onTimeout() {
 	this->setTime(this->targetTime);
 	this->schedule(this->targetTime);
@@ -43,8 +54,15 @@ void SystemClock::update() {
 	}
 }
 
+QDateTime SystemClock::wallClockNow() const {
+#ifdef QS_TEST
+	if (this->mNowProvider) return this->mNowProvider();
+#endif
+	return QDateTime::currentDateTime();
+}
+
 void SystemClock::setTime(const QDateTime& targetTime) {
-	auto currentTime = QDateTime::currentDateTime();
+	auto currentTime = this->wallClockNow();
 	auto offset = currentTime.msecsTo(targetTime);
 	this->currentTime = offset > -500 && offset < 500 ? targetTime : currentTime;
 
@@ -63,7 +81,7 @@ void SystemClock::schedule(const QDateTime& targetTime) {
 	auto minutePrecision = this->mPrecision >= SystemClock::Minutes;
 	auto hourPrecision = this->mPrecision >= SystemClock::Hours;
 
-	auto currentTime = QDateTime::currentDateTime();
+	auto currentTime = this->wallClockNow();
 
 	auto offset = currentTime.msecsTo(targetTime);
 
@@ -86,3 +104,11 @@ void SystemClock::schedule(const QDateTime& targetTime) {
 	this->timer.start(static_cast<qint32>(delay));
 	this->targetTime = nextTime;
 }
+
+#ifdef QS_TEST
+void SystemClock::setNowProvider(NowProvider provider) { this->mNowProvider = std::move(provider); }
+
+void SystemClock::clearNowProvider() { this->mNowProvider = NowProvider(); }
+
+void SystemClock::testFireTimeout() { this->onTimeout(); }
+#endif

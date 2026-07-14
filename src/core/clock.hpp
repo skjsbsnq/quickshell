@@ -7,6 +7,10 @@
 #include <qtmetamacros.h>
 #include <qtypes.h>
 
+#ifdef QS_TEST
+#include <functional>
+#endif
+
 ///! System clock accessor.
 /// SystemClock is a view into the system's clock.
 /// It updates at hour, minute, or second intervals depending on @@precision.
@@ -27,6 +31,15 @@
 /// > however this can be either before or after the clock changes (+-50ms). If you
 /// > need a date object, use @@date instead of constructing a new one, or the time
 /// > of the constructed object could be off by up to a second.
+///
+/// # Wall-clock jump convergence
+/// SystemClock has no OS time-change notification. Guarantees:
+/// - @@resync() samples the wall clock immediately and updates @@date.
+/// - Without an explicit resync, forward/backward jumps and timezone/offset
+///   changes converge at the next precision-boundary timer fire (Minutes:
+///   next minute boundary; not an active sub-minute notification).
+/// - When a timer fires more than 500ms off its target, the real wall clock
+///   is used instead of the predicted target.
 class SystemClock: public QObject {
 	Q_OBJECT;
 	/// If the clock should update. Defaults to true.
@@ -70,6 +83,12 @@ public:
 	[[nodiscard]] quint32 minutes() const { return this->currentTime.time().minute(); }
 	[[nodiscard]] quint32 seconds() const { return this->currentTime.time().second(); }
 
+	/// Immediately sample the wall clock into @@date.
+	/// When enabled, also reschedules the next precision-boundary timer.
+	/// When disabled, updates @@date but leaves the timer stopped.
+	/// This is the sole authorized explicit refresh entry (no updateNow/refresh aliases).
+	Q_INVOKABLE void resync();
+
 signals:
 	void enabledChanged();
 	void precisionChanged();
@@ -85,7 +104,22 @@ private:
 	QDateTime currentTime;
 	QDateTime targetTime;
 
+	[[nodiscard]] QDateTime wallClockNow() const;
 	void update();
 	void setTime(const QDateTime& targetTime);
 	void schedule(const QDateTime& targetTime);
+
+#ifdef QS_TEST
+public:
+	/// Test-only wall-clock seam. Production builds always call QDateTime::currentDateTime().
+	/// Not exposed to QML; not a second business clock.
+	using NowProvider = std::function<QDateTime()>;
+	void setNowProvider(NowProvider provider);
+	void clearNowProvider();
+	/// Drive the internal precision timer as if it fired (test only).
+	void testFireTimeout();
+
+private:
+	NowProvider mNowProvider;
+#endif
 };
