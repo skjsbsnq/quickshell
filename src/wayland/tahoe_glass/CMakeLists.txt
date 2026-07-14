@@ -25,3 +25,7 @@ target_link_libraries(quickshell-wayland-tahoe-glass PRIVATE
 qs_module_pch(quickshell-wayland-tahoe-glass)
 
 target_link_libraries(quickshell PRIVATE quickshell-wayland-tahoe-glassplugin)
+
+if (BUILD_TESTING)
+	add_subdirectory(test)
+endif()

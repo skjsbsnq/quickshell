@@ -26,6 +26,29 @@ struct TahoeGlassRegionState {
 	qreal materialAlpha = 1.0;
 };
 
+/// Protocol and local state use last-set-wins per region id.
+/// Input lists may contain duplicate ids; the final occurrence wins and the
+/// canonical list contains each id at most once (order of last occurrence).
+[[nodiscard]] QList<TahoeGlassRegionState>
+canonicalizeRegions(const QList<TahoeGlassRegionState>& regions);
+
+struct TahoeGlassRegionDiff {
+	bool changed = false;
+	bool clearAll = false;
+	QList<quint32> removeIds;
+	QList<TahoeGlassRegionState> setRegions;
+	/// Always canonical (unique ids, last-set-wins).
+	QList<TahoeGlassRegionState> nextRegions;
+};
+
+/// Diff two region lists after canonicalizing both sides. Each id appears in
+/// removeIds and setRegions at most once. Unchanged canonical content yields
+/// changed=false and zero protocol ops (reorder-only is a no-op on the wire).
+[[nodiscard]] TahoeGlassRegionDiff diffRegions(
+    const QList<TahoeGlassRegionState>& oldRegions,
+    const QList<TahoeGlassRegionState>& newRegions
+);
+
 class TahoeGlassSurface: public QtWayland::tahoe_glass_surface_v1 {
 public:
 	explicit TahoeGlassSurface(::tahoe_glass_surface_v1* surface);
@@ -35,6 +58,7 @@ public:
 	[[nodiscard]] bool setRegions(const QList<TahoeGlassRegionState>& regions);
 
 private:
+	/// Canonical unique-id region state matching the last protocol content.
 	QList<TahoeGlassRegionState> mRegions;
 };
 

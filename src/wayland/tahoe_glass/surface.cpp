@@ -2,6 +2,7 @@
 
 #include <qglobal.h>
 #include <qhash.h>
+#include <qset.h>
 #include <qwayland-tahoe-glass-v1.h>
 
 namespace qs::wayland::tahoe_glass::impl {
@@ -22,8 +23,8 @@ bool sameRegion(const TahoeGlassRegionState& lhs, const TahoeGlassRegionState& r
 	    && fuzzyEqual(lhs.materialAlpha, rhs.materialAlpha);
 }
 
-/// Content equality by region id (order-independent). List order has no visual
-/// semantics on the compositor — regions are stored/looked up by id.
+/// Content equality by region id (order-independent). Both sides must already
+/// be canonical (unique ids); list order has no visual semantics.
 bool sameRegionsById(
     const QList<TahoeGlassRegionState>& lhs,
     const QList<TahoeGlassRegionState>& rhs
@@ -44,7 +45,10 @@ bool sameRegionsById(
 	return true;
 }
 
-void emitSetRegion(QtWayland::tahoe_glass_surface_v1* surface, const TahoeGlassRegionState& region) {
+void emitSetRegion(
+    QtWayland::tahoe_glass_surface_v1* surface,
+    const TahoeGlassRegionState& region
+) {
 	surface->set_region(
 	    region.id,
 	    region.rect.x(),
@@ -64,6 +68,80 @@ void emitSetRegion(QtWayland::tahoe_glass_surface_v1* surface, const TahoeGlassR
 
 } // namespace
 
+QList<TahoeGlassRegionState> canonicalizeRegions(const QList<TahoeGlassRegionState>& regions) {
+	// Last-set-wins: walk reverse so the first time an id is seen is its final value.
+	// Prepend restores left-to-right order of those last occurrences.
+	QList<TahoeGlassRegionState> canonical;
+	QSet<quint32> seen;
+	canonical.reserve(regions.size());
+	seen.reserve(regions.size());
+
+	for (auto i = regions.size(); i > 0; --i) {
+		const auto& region = regions.at(i - 1);
+		if (seen.contains(region.id)) continue;
+		seen.insert(region.id);
+		canonical.prepend(region);
+	}
+
+	return canonical;
+}
+
+TahoeGlassRegionDiff diffRegions(
+    const QList<TahoeGlassRegionState>& oldRegions,
+    const QList<TahoeGlassRegionState>& newRegions
+) {
+	TahoeGlassRegionDiff diff;
+	const auto oldCanonical = canonicalizeRegions(oldRegions);
+	const auto newCanonical = canonicalizeRegions(newRegions);
+	diff.nextRegions = newCanonical;
+
+	// Order-independent no-op: pure reorder / duplicate expansion must not
+	// generate protocol traffic.
+	if (sameRegionsById(oldCanonical, newCanonical)) {
+		return diff;
+	}
+
+	if (newCanonical.isEmpty()) {
+		if (!oldCanonical.isEmpty()) {
+			diff.changed = true;
+			diff.clearAll = true;
+		}
+		return diff;
+	}
+
+	QHash<quint32, const TahoeGlassRegionState*> oldById;
+	oldById.reserve(oldCanonical.size());
+	for (const auto& region: oldCanonical) {
+		oldById.insert(region.id, &region);
+	}
+
+	QHash<quint32, const TahoeGlassRegionState*> newById;
+	newById.reserve(newCanonical.size());
+	for (const auto& region: newCanonical) {
+		newById.insert(region.id, &region);
+	}
+
+	// Removals: ids present previously but absent now (each id once).
+	for (const auto& old: oldCanonical) {
+		if (!newById.contains(old.id)) {
+			diff.removeIds.append(old.id);
+			diff.changed = true;
+		}
+	}
+
+	// Inserts and field updates: set_region replaces by id on the server.
+	// Iterate the canonical list so each id is set at most once.
+	for (const auto& region: newCanonical) {
+		const auto* old = oldById.value(region.id, nullptr);
+		if (old == nullptr || !sameRegion(*old, region)) {
+			diff.setRegions.append(region);
+			diff.changed = true;
+		}
+	}
+
+	return diff;
+}
+
 TahoeGlassSurface::TahoeGlassSurface(
     ::tahoe_glass_surface_v1* surface // NOLINT(misc-include-cleaner)
 )
@@ -77,57 +155,31 @@ TahoeGlassSurface::~TahoeGlassSurface() {
 bool TahoeGlassSurface::setRegions(const QList<TahoeGlassRegionState>& regions) {
 	if (!this->isInitialized()) return false;
 
-	// Order-independent no-op: pure reorder must not generate protocol traffic
-	// or force a wl_surface commit.
-	if (sameRegionsById(this->mRegions, regions)) {
-		// Keep local list order in sync with the caller without wire traffic.
-		this->mRegions = regions;
+	const auto diff = diffRegions(this->mRegions, regions);
+
+	// Keep local storage canonical even when the wire is a no-op (e.g. pure
+	// reorder or a second set of the same duplicate-expanded list).
+	if (!diff.changed) {
+		this->mRegions = diff.nextRegions;
 		return false;
 	}
 
-	// Full clear is a single protocol request when the new list is empty.
-	if (regions.isEmpty()) {
-		if (!this->mRegions.isEmpty()) {
-			this->clear_regions();
-			this->mRegions.clear();
-			return true;
-		}
-		return false;
+	if (diff.clearAll) {
+		this->clear_regions();
+		this->mRegions = diff.nextRegions;
+		return true;
 	}
 
-	QHash<quint32, const TahoeGlassRegionState*> oldById;
-	oldById.reserve(this->mRegions.size());
-	for (const auto& region: this->mRegions) {
-		oldById.insert(region.id, &region);
+	for (const auto id: diff.removeIds) {
+		this->remove_region(id);
 	}
 
-	QHash<quint32, const TahoeGlassRegionState*> newById;
-	newById.reserve(regions.size());
-	for (const auto& region: regions) {
-		newById.insert(region.id, &region);
+	for (const auto& region: diff.setRegions) {
+		emitSetRegion(this, region);
 	}
 
-	bool changed = false;
-
-	// Removals: ids present previously but absent now.
-	for (const auto& old: this->mRegions) {
-		if (!newById.contains(old.id)) {
-			this->remove_region(old.id);
-			changed = true;
-		}
-	}
-
-	// Inserts and field updates: set_region replaces by id on the server.
-	for (const auto& region: regions) {
-		const auto* old = oldById.value(region.id, nullptr);
-		if (old == nullptr || !sameRegion(*old, region)) {
-			emitSetRegion(this, region);
-			changed = true;
-		}
-	}
-
-	this->mRegions = regions;
-	return changed;
+	this->mRegions = diff.nextRegions;
+	return true;
 }
 
 } // namespace qs::wayland::tahoe_glass::impl

@@ -1,0 +1,20 @@
+function (qs_test name)
+	add_executable(${name} ${ARGN})
+	target_link_libraries(${name} PRIVATE
+		Qt::Quick
+		Qt::Test
+		Qt::WaylandClient
+		Qt::WaylandClientPrivate
+		quickshell-wayland-tahoe-glass
+		wlp-tahoe-glass
+	)
+	target_include_directories(${name} PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/..
+		${CMAKE_CURRENT_BINARY_DIR}/..
+	)
+	add_test(NAME ${name} WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}" COMMAND $<TARGET_FILE:${name}>)
+	set_tests_properties(${name} PROPERTIES LABELS tahoe-glass)
+endfunction()
+
+# Unique shared harness for Task 06/13/20 Tahoe glass behavioral tests.
+qs_test(tahoe-glass-tests region_diff.cpp)
