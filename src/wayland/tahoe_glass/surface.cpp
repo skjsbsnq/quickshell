@@ -164,7 +164,9 @@ bool TahoeGlassSurface::setRegions(const QList<TahoeGlassRegionState>& regions) 
 		return false;
 	}
 
-	if (diff.clearAll) {
+	// Full clear is a single protocol request when the new list is empty.
+	// (Equivalent to diff.clearAll after canonicalize of an empty input.)
+	if (regions.isEmpty()) {
 		this->clear_regions();
 		this->mRegions = diff.nextRegions;
 		return true;
