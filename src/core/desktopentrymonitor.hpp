@@ -16,17 +16,26 @@ public:
 	DesktopEntryMonitor(DesktopEntryMonitor&&) = delete;
 	DesktopEntryMonitor& operator=(DesktopEntryMonitor&&) = delete;
 
+#ifdef QS_TEST
+	/// Test-only constructor: watch the given applications roots instead of XDG paths.
+	explicit DesktopEntryMonitor(const QStringList& watchRoots, QObject* parent = nullptr);
+#endif
+
 signals:
 	void desktopEntriesChanged();
 
 private slots:
 	void onDirectoryChanged(const QString& path);
+	void onFileChanged(const QString& path);
 	void processChanges();
 
 private:
-	void startMonitoring();
+	void initCommon();
+	void startMonitoring(const QStringList& roots);
 	void scanAndWatch(const QString& dirPath);
+	void rebuildWatches();
 
 	QFileSystemWatcher watcher;
 	QTimer debounceTimer;
+	QStringList mRoots;
 };

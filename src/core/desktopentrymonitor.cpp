@@ -21,9 +21,16 @@ void addPathAndParents(QFileSystemWatcher& watcher, const QString& path) {
 		p = parent;
 	}
 }
+
+void watchDesktopFilesInDir(QFileSystemWatcher& watcher, const QDir& dir) {
+	const auto files = dir.entryInfoList({QStringLiteral("*.desktop")}, QDir::Files);
+	for (const auto& file: files) {
+		watcher.addPath(file.absoluteFilePath());
+	}
+}
 } // namespace
 
-DesktopEntryMonitor::DesktopEntryMonitor(QObject* parent): QObject(parent) {
+void DesktopEntryMonitor::initCommon() {
 	this->debounceTimer.setSingleShot(true);
 	this->debounceTimer.setInterval(100);
 
@@ -34,17 +41,39 @@ DesktopEntryMonitor::DesktopEntryMonitor(QObject* parent): QObject(parent) {
 	    &DesktopEntryMonitor::onDirectoryChanged
 	);
 	QObject::connect(
+	    &this->watcher,
+	    &QFileSystemWatcher::fileChanged,
+	    this,
+	    &DesktopEntryMonitor::onFileChanged
+	);
+	QObject::connect(
 	    &this->debounceTimer,
 	    &QTimer::timeout,
 	    this,
 	    &DesktopEntryMonitor::processChanges
 	);
-
-	this->startMonitoring();
 }
 
-void DesktopEntryMonitor::startMonitoring() {
-	for (const auto& path: DesktopEntryManager::desktopPaths()) {
+DesktopEntryMonitor::DesktopEntryMonitor(QObject* parent): QObject(parent) {
+	this->initCommon();
+	this->startMonitoring(DesktopEntryManager::desktopPaths());
+}
+
+#ifdef QS_TEST
+DesktopEntryMonitor::DesktopEntryMonitor(const QStringList& watchRoots, QObject* parent)
+    : QObject(parent) {
+	this->initCommon();
+	this->startMonitoring(watchRoots);
+}
+#endif
+
+void DesktopEntryMonitor::startMonitoring(const QStringList& roots) {
+	this->mRoots = roots;
+	this->rebuildWatches();
+}
+
+void DesktopEntryMonitor::rebuildWatches() {
+	for (const auto& path: this->mRoots) {
 		if (!QDir(path).exists()) continue;
 		addPathAndParents(this->watcher, path);
 		this->scanAndWatch(path);
@@ -56,13 +85,31 @@ void DesktopEntryMonitor::scanAndWatch(const QString& dirPath) {
 	if (!dir.exists()) return;
 
 	this->watcher.addPath(dirPath);
+	watchDesktopFilesInDir(this->watcher, dir);
 
-	auto subdirs = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks);
-	for (const auto& subdir: subdirs) this->watcher.addPath(subdir.absoluteFilePath());
+	// Match the historical one-level subdirectory depth, but also watch desktop
+	// files inside those subdirectories so in-place edits are observed.
+	const auto subdirs = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks);
+	for (const auto& subdir: subdirs) {
+		const auto subPath = subdir.absoluteFilePath();
+		this->watcher.addPath(subPath);
+		watchDesktopFilesInDir(this->watcher, QDir(subPath));
+	}
 }
 
 void DesktopEntryMonitor::onDirectoryChanged(const QString& /*path*/) {
 	this->debounceTimer.start();
 }
 
-void DesktopEntryMonitor::processChanges() { emit this->desktopEntriesChanged(); }
+void DesktopEntryMonitor::onFileChanged(const QString& /*path*/) {
+	// In-place content edits and atomic replacements surface here. After the
+	// debounce, rebuildWatches re-adds paths that the kernel dropped.
+	this->debounceTimer.start();
+}
+
+void DesktopEntryMonitor::processChanges() {
+	// Atomic replace / delete often auto-removes the file path from the watcher.
+	// Rescan roots so the next edit is still observed, then notify the manager.
+	this->rebuildWatches();
+	emit this->desktopEntriesChanged();
+}
