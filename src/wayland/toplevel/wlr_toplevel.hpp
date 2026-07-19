@@ -39,6 +39,10 @@ public:
 	void setFullscreen(bool fullscreen);
 	void fullscreenOn(QScreen* screen);
 	void setRectangle(QWindow* window, QRect rect);
+	// Drop surface bindings without talking to the compositor. Used when the
+	// foreign-toplevel handle is closing and the wayland object is about to be
+	// destroy()'d while Dock/TopBar visibility may still re-enter setRectangle.
+	void clearRectangleBinding();
 
 	WlOutputTracker visibleScreens;
 

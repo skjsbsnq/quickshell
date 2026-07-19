@@ -109,50 +109,61 @@ void ToplevelHandle::fullscreenOn(QScreen* screen) {
 	this->set_fullscreen(waylandScreen != nullptr ? waylandScreen->output() : nullptr);
 }
 
+void ToplevelHandle::clearRectangleBinding() {
+	if (this->rectWindow == nullptr) return;
+	QObject::disconnect(this->rectWindow, nullptr, this, nullptr);
+	this->rectWindow = nullptr;
+}
+
 void ToplevelHandle::setRectangle(QWindow* window, QRect rect) {
+	// After zwlr_foreign_toplevel_handle_v1.closed the proxy is destroy()'d.
+	// Dock unmap/remap during that emission must not re-enter set_rectangle.
+	if (this->object() == nullptr) return;
+
 	if (window == nullptr) {
 		// will be cleared by the compositor if the surface is destroyed
 		if (this->rectWindow != nullptr) {
 			auto* waylandWindow =
 			    dynamic_cast<QtWaylandClient::QWaylandWindow*>(this->rectWindow->handle());
 
-			if (waylandWindow != nullptr) {
+			if (waylandWindow != nullptr && waylandWindow->surface() != nullptr) {
 				this->set_rectangle(waylandWindow->surface(), 0, 0, 0, 0);
 			}
 		}
 
-		QObject::disconnect(this->rectWindow, nullptr, this, nullptr);
-		this->rectWindow = nullptr;
+		this->clearRectangleBinding();
 		return;
 	}
 
 	if (this->rectWindow != window) {
-		if (this->rectWindow != nullptr) {
-			QObject::disconnect(this->rectWindow, nullptr, this, nullptr);
-		}
-
+		this->clearRectangleBinding();
 		this->rectWindow = window;
 		QObject::connect(window, &QObject::destroyed, this, &ToplevelHandle::onRectWindowDestroyed);
 	}
 
 	if (auto* waylandWindow = dynamic_cast<QtWaylandClient::QWaylandWindow*>(window->handle())) {
-		this->set_rectangle(waylandWindow->surface(), rect.x(), rect.y(), rect.width(), rect.height());
+		if (waylandWindow->surface() != nullptr) {
+			this->set_rectangle(waylandWindow->surface(), rect.x(), rect.y(), rect.width(), rect.height());
+		}
 	} else {
+		// Drop any previous deferred binding for this window before re-arming.
+		QObject::disconnect(window, &QWindow::visibleChanged, this, nullptr);
 		QObject::connect(window, &QWindow::visibleChanged, this, [this, window, rect]() {
-			if (window->isVisible()) {
-				if (window->handle() == nullptr) {
-					window->create();
-				}
-
-				auto* waylandWindow = dynamic_cast<QtWaylandClient::QWaylandWindow*>(window->handle());
-				this->set_rectangle(
-				    waylandWindow->surface(),
-				    rect.x(),
-				    rect.y(),
-				    rect.width(),
-				    rect.height()
-				);
+			if (this->object() == nullptr || this->rectWindow != window) return;
+			if (!window->isVisible()) return;
+			if (window->handle() == nullptr) {
+				window->create();
 			}
+
+			auto* waylandWindow = dynamic_cast<QtWaylandClient::QWaylandWindow*>(window->handle());
+			if (waylandWindow == nullptr || waylandWindow->surface() == nullptr) return;
+			this->set_rectangle(
+			    waylandWindow->surface(),
+			    rect.x(),
+			    rect.y(),
+			    rect.width(),
+			    rect.height()
+			);
 		});
 	}
 }
@@ -171,6 +182,10 @@ void ToplevelHandle::zwlr_foreign_toplevel_handle_v1_done() {
 
 void ToplevelHandle::zwlr_foreign_toplevel_handle_v1_closed() {
 	qCDebug(logToplevelManagement) << this << "closed";
+	// Clear Dock rectangle bindings before destroy(). Closing a fullscreen
+	// game flips shell panel visibility while this closed signal is still on
+	// the stack; those visibleChanged slots must not touch a dead proxy.
+	this->clearRectangleBinding();
 	this->destroy();
 	emit this->closed();
 	delete this;

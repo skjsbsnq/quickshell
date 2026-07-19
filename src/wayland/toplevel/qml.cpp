@@ -30,6 +30,13 @@ Toplevel::Toplevel(wlr::ToplevelHandle* handle, QObject* parent): QObject(parent
 }
 
 void Toplevel::onClosed() {
+	// Detach Dock rectangle slots before notifying QML so unmap/remap work
+	// during model removal cannot re-enter setRectangle on a dying handle.
+	if (this->rectWindow != nullptr) {
+		QObject::disconnect(this->rectWindow, nullptr, this, nullptr);
+		this->rectWindow = nullptr;
+		this->rectangle = QRect();
+	}
 	emit this->closed();
 	delete this;
 }
@@ -71,6 +78,8 @@ void Toplevel::fullscreenOn(QuickshellScreenInfo* screen) {
 }
 
 void Toplevel::setRectangle(QObject* window, QRect rect) {
+	if (this->handle == nullptr) return;
+
 	auto* proxyWindow = ProxyWindowBase::forObject(window);
 
 	if (proxyWindow != this->rectWindow) {
@@ -98,12 +107,14 @@ void Toplevel::setRectangle(QObject* window, QRect rect) {
 	}
 
 	this->rectangle = rect;
-	this->handle->setRectangle(proxyWindow->backingWindow(), rect);
+	// proxyWindow may be null when unsetting; handle guards a destroyed proxy.
+	this->handle->setRectangle(proxyWindow != nullptr ? proxyWindow->backingWindow() : nullptr, rect);
 }
 
 void Toplevel::unsetRectangle() { this->setRectangle(nullptr, QRect()); }
 
 void Toplevel::onRectangleProxyConnected() {
+	if (this->handle == nullptr || this->rectWindow == nullptr) return;
 	this->handle->setRectangle(this->rectWindow->backingWindow(), this->rectangle);
 }
 
