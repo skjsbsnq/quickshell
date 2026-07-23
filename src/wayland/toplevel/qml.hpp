@@ -25,6 +25,10 @@ class Toplevel: public QObject {
 	Q_OBJECT;
 	Q_PROPERTY(QString appId READ appId NOTIFY appIdChanged);
 	Q_PROPERTY(QString title READ title NOTIFY titleChanged);
+	/// Stable compositor identity: niri MappedId decimal string from
+	/// ext_foreign_toplevel_handle_v1.identifier, paired onto this wlr handle.
+	/// Empty when unpaired. Always a string — never coerce through JS Number.
+	Q_PROPERTY(QString identifier READ identifier NOTIFY identifierChanged);
 	/// Parent toplevel if this toplevel is a modal/dialog, otherwise null.
 	Q_PROPERTY(qs::wayland::toplevel::Toplevel* parent READ parent NOTIFY parentChanged);
 	/// If the window is currently activated or focused.
@@ -78,6 +82,7 @@ public:
 
 	[[nodiscard]] QString appId() const;
 	[[nodiscard]] QString title() const;
+	[[nodiscard]] QString identifier() const;
 	[[nodiscard]] Toplevel* parent() const;
 	[[nodiscard]] bool activated() const;
 	[[nodiscard]] QList<QuickshellScreenInfo*> screens() const;
@@ -97,6 +102,7 @@ signals:
 	void closed();
 	void appIdChanged();
 	void titleChanged();
+	void identifierChanged();
 	void parentChanged();
 	void activatedChanged();
 	void screensChanged();
@@ -129,11 +135,14 @@ public:
 
 signals:
 	void activeToplevelChanged();
+	/// Fired when any Toplevel gains/changes its paired ext identifier (R11).
+	void toplevelIdentityChanged();
 
 private slots:
 	void onToplevelReady(wlr::ToplevelHandle* handle);
 	void onToplevelActiveChanged();
 	void onToplevelClosed();
+	void onToplevelIdentifierChanged();
 
 private:
 	explicit ToplevelManager();
@@ -177,6 +186,7 @@ public:
 
 signals:
 	void activeToplevelChanged();
+	void toplevelIdentityChanged();
 };
 
 } // namespace qs::wayland::toplevel

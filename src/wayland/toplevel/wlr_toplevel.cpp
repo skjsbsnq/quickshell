@@ -76,6 +76,14 @@ void ToplevelManager::onToplevelClosed() {
 
 QString ToplevelHandle::appId() const { return this->mAppId; }
 QString ToplevelHandle::title() const { return this->mTitle; }
+QString ToplevelHandle::identifier() const { return this->mIdentifier; }
+
+void ToplevelHandle::setIdentifier(const QString& identifier) {
+	if (this->mIdentifier == identifier) return;
+	this->mIdentifier = identifier;
+	emit this->identifierChanged();
+}
+
 ToplevelHandle* ToplevelHandle::parent() const { return this->mParent; }
 bool ToplevelHandle::activated() const { return this->mActivated; }
 bool ToplevelHandle::maximized() const { return this->mMaximized; }

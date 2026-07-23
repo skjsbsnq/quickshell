@@ -27,6 +27,10 @@ class ToplevelHandle
 public:
 	[[nodiscard]] QString appId() const;
 	[[nodiscard]] QString title() const;
+	/// Decimal MappedId from coordinated ext-foreign-toplevel-list pairing (R11).
+	/// Empty when unpaired or when ext-list is unavailable. Never a fuzzy guess.
+	[[nodiscard]] QString identifier() const;
+	void setIdentifier(const QString& identifier);
 	[[nodiscard]] ToplevelHandle* parent() const;
 	[[nodiscard]] bool activated() const;
 	[[nodiscard]] bool maximized() const;
@@ -54,6 +58,7 @@ signals:
 
 	void appIdChanged();
 	void titleChanged();
+	void identifierChanged();
 	void parentChanged();
 	void activatedChanged();
 	void maximizedChanged();
@@ -77,6 +82,7 @@ private:
 	bool isReady = false;
 	QString mAppId;
 	QString mTitle;
+	QString mIdentifier;
 	ToplevelHandle* mParent = nullptr;
 	bool mActivated = false;
 	bool mMaximized = false;

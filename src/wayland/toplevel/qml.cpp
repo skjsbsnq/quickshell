@@ -10,6 +10,7 @@
 #include "../../core/util.hpp"
 #include "../../window/proxywindow.hpp"
 #include "../output_tracking.hpp"
+#include "identifier_pairing.hpp"
 #include "wlr_toplevel.hpp"
 
 namespace qs::wayland::toplevel {
@@ -19,6 +20,7 @@ Toplevel::Toplevel(wlr::ToplevelHandle* handle, QObject* parent): QObject(parent
 	QObject::connect(handle, &wlr::ToplevelHandle::closed, this, &Toplevel::onClosed);
 	QObject::connect(handle, &wlr::ToplevelHandle::appIdChanged, this, &Toplevel::appIdChanged);
 	QObject::connect(handle, &wlr::ToplevelHandle::titleChanged, this, &Toplevel::titleChanged);
+	QObject::connect(handle, &wlr::ToplevelHandle::identifierChanged, this, &Toplevel::identifierChanged);
 	QObject::connect(handle, &wlr::ToplevelHandle::parentChanged, this, &Toplevel::parentChanged);
 	QObject::connect(handle, &wlr::ToplevelHandle::activatedChanged, this, &Toplevel::activatedChanged);
 	QObject::connect(&handle->visibleScreens, &WlOutputTracker::screenAdded, this, &Toplevel::screensChanged);
@@ -46,6 +48,7 @@ void Toplevel::close() { this->handle->close(); }
 
 QString Toplevel::appId() const { return this->handle->appId(); }
 QString Toplevel::title() const { return this->handle->title(); }
+QString Toplevel::identifier() const { return this->handle->identifier(); }
 
 Toplevel* Toplevel::parent() const {
 	return ToplevelManager::instance()->forImpl(this->handle->parent());
@@ -124,6 +127,8 @@ void Toplevel::onRectangleProxyDestroyed() {
 }
 
 ToplevelManager::ToplevelManager() {
+	// Force coordinated ext↔wlr pairing before exposing ready toplevels.
+	(void) IdentifierPairing::instance();
 	auto* manager = wlr::ToplevelManager::instance();
 
 	QObject::connect(
@@ -156,11 +161,17 @@ void ToplevelManager::onToplevelReady(wlr::ToplevelHandle* handle) {
 	// clang-format off
 	QObject::connect(toplevel, &Toplevel::closed, this, &ToplevelManager::onToplevelClosed);
 	QObject::connect(toplevel, &Toplevel::activatedChanged, this, &ToplevelManager::onToplevelActiveChanged);
+	QObject::connect(toplevel, &Toplevel::identifierChanged, this, &ToplevelManager::onToplevelIdentifierChanged);
 	// clang-format on
 
 	if (toplevel->activated()) this->setActiveToplevel(toplevel);
 	this->mToplevels.insertObject(toplevel);
+	// Identifier may already be set by IdentifierPairing (connected first); still
+	// notify shell so merge can run if list-changed raced ahead of property bind.
+	if (!toplevel->identifier().isEmpty()) emit this->toplevelIdentityChanged();
 }
+
+void ToplevelManager::onToplevelIdentifierChanged() { emit this->toplevelIdentityChanged(); }
 
 void ToplevelManager::onToplevelActiveChanged() {
 	auto* toplevel = qobject_cast<Toplevel*>(this->sender());
@@ -190,6 +201,12 @@ ToplevelManagerQml::ToplevelManagerQml(QObject* parent): QObject(parent) {
 	    &ToplevelManager::activeToplevelChanged,
 	    this,
 	    &ToplevelManagerQml::activeToplevelChanged
+	);
+	QObject::connect(
+	    ToplevelManager::instance(),
+	    &ToplevelManager::toplevelIdentityChanged,
+	    this,
+	    &ToplevelManagerQml::toplevelIdentityChanged
 	);
 }
 
