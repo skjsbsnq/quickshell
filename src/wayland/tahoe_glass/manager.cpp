@@ -8,7 +8,11 @@
 
 namespace qs::wayland::tahoe_glass::impl {
 
-TahoeGlassManager::TahoeGlassManager(): QWaylandClientExtensionTemplate(1) { this->initialize(); }
+// Bind up to v4: v4 adds the presentation-transform requests
+// (set_transform / set_transform_target / set_region_morph). Qt clamps to
+// min(server version, 4); TahoeGlassSurface::supportsTransform() gates the
+// v4 requests at runtime so an older niri keeps working with regions only.
+TahoeGlassManager::TahoeGlassManager(): QWaylandClientExtensionTemplate(4) { this->initialize(); }
 
 TahoeGlassSurface* TahoeGlassManager::createGlassSurface(QtWaylandClient::QWaylandWindow* window) {
 	if (!this->isActive()) return nullptr;

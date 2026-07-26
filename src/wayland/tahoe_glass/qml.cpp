@@ -521,6 +521,112 @@ QQmlListProperty<TahoeGlassRegion> TahoeGlass::regions() {
 
 bool TahoeGlass::available() const { return this->mAvailable; }
 
+bool TahoeGlass::transformAvailable() const { return this->mTransformAvailable; }
+
+impl::TahoeGlassSurface* TahoeGlass::ensureSurface() {
+	if (this->surface) return this->surface.get();
+	if (!this->mWaylandWindow || !this->mWaylandWindow->surface()) return nullptr;
+
+	if (auto* manager = impl::TahoeGlassManager::instance()) {
+		this->surface =
+		    std::unique_ptr<impl::TahoeGlassSurface>(manager->createGlassSurface(this->mWaylandWindow)
+		    );
+	}
+
+	return this->surface.get();
+}
+
+bool TahoeGlass::sendTransform(qreal x, qreal y, qreal scaleX, qreal scaleY) {
+	auto* surface = this->ensureSurface();
+	if (!surface || !surface->setTransform(x, y, scaleX, scaleY)) return false;
+
+	// Transform requests are double-buffered; with no accompanying content
+	// change nothing else would commit, so commit explicitly.
+	this->mWaylandWindow->commit();
+	return true;
+}
+
+bool TahoeGlass::sendTransformTargetSpring(
+    qreal x,
+    qreal y,
+    qreal scaleX,
+    qreal scaleY,
+    qreal dampingRatio,
+    qreal stiffness,
+    qreal epsilon
+) {
+	auto* surface = this->ensureSurface();
+	if (!surface
+	    || !surface->setTransformTargetSpring(x, y, scaleX, scaleY, dampingRatio, stiffness, epsilon))
+	{
+		return false;
+	}
+
+	this->mWaylandWindow->commit();
+	return true;
+}
+
+bool TahoeGlass::sendTransformTargetEased(
+    qreal x,
+    qreal y,
+    qreal scaleX,
+    qreal scaleY,
+    qreal durationMs,
+    qreal x1,
+    qreal y1,
+    qreal x2,
+    qreal y2
+) {
+	auto* surface = this->ensureSurface();
+	if (!surface
+	    || !surface->setTransformTargetEased(x, y, scaleX, scaleY, durationMs, x1, y1, x2, y2))
+	{
+		return false;
+	}
+
+	this->mWaylandWindow->commit();
+	return true;
+}
+
+bool TahoeGlass::queueRegionMorphSpring(
+    quint32 regionId,
+    qreal dampingRatio,
+    qreal stiffness,
+    qreal epsilon
+) {
+	auto* surface = this->ensureSurface();
+	if (!surface || !surface->supportsTransform()) return false;
+
+	this->pendingMorph =
+	    PendingMorph {.regionId = regionId, .eased = false, .p1 = dampingRatio, .p2 = stiffness, .p3 = epsilon};
+	this->updateRegions();
+	return true;
+}
+
+bool TahoeGlass::queueRegionMorphEased(
+    quint32 regionId,
+    qreal durationMs,
+    qreal x1,
+    qreal y1,
+    qreal x2,
+    qreal y2
+) {
+	auto* surface = this->ensureSurface();
+	if (!surface || !surface->supportsTransform()) return false;
+
+	this->pendingMorph = PendingMorph {
+	    .regionId = regionId,
+	    .eased = true,
+	    .p1 = durationMs,
+	    .p2 = x1,
+	    .p3 = y1,
+	    .p4 = x2,
+	    .p5 = y2,
+	};
+	this->updateRegions();
+	return true;
+}
+
 bool TahoeGlass::fallbackEnabled() const { return this->mFallbackEnabled; }
 
 void TahoeGlass::setFallbackEnabled(bool enabled) {
@@ -534,6 +640,7 @@ void TahoeGlass::setFallbackEnabled(bool enabled) {
 void TahoeGlass::platformSurfaceAboutToBeDestroyed() {
 	this->surface = nullptr;
 	this->pendingRegions = false;
+	this->pendingMorph.reset();
 	this->setAvailable(false);
 	this->clearFallback();
 }
@@ -572,6 +679,7 @@ void TahoeGlass::waylandSurfaceCreated() {
 	if (prev && prev->surface) {
 		this->surface.swap(prev->surface);
 		prev->pendingRegions = false;
+		prev->pendingMorph.reset();
 		prev->setAvailable(false);
 	}
 
@@ -600,6 +708,7 @@ void TahoeGlass::waylandSurfaceCreated() {
 void TahoeGlass::waylandSurfaceDestroyed() {
 	this->surface = nullptr;
 	this->pendingRegions = false;
+	this->pendingMorph.reset();
 	this->setAvailable(false);
 	this->clearFallback();
 
@@ -630,13 +739,7 @@ void TahoeGlass::onWindowPolished() {
 	if (!this->pendingRegions || !this->mWaylandWindow || !this->mWaylandWindow->surface()) return;
 	this->pendingRegions = false;
 
-	if (!this->surface) {
-		if (auto* manager = impl::TahoeGlassManager::instance()) {
-			this->surface = std::unique_ptr<impl::TahoeGlassSurface>(
-			    manager->createGlassSurface(this->mWaylandWindow)
-			);
-		}
-	}
+	this->ensureSurface();
 
 	QList<impl::TahoeGlassRegionState> logicalRegions;
 	QList<impl::TahoeGlassRegionState> surfaceRegions;
@@ -658,16 +761,45 @@ void TahoeGlass::onWindowPolished() {
 
 	if (this->surface) {
 		const auto changed = this->surface->setRegions(surfaceRegions);
+
+		bool morphSent = false;
+		if (this->pendingMorph) {
+			const auto morph = *this->pendingMorph;
+			this->pendingMorph.reset();
+			if (morph.eased) {
+				morphSent = this->surface->setRegionMorphEased(
+				    morph.regionId,
+				    morph.p1,
+				    morph.p2,
+				    morph.p3,
+				    morph.p4,
+				    morph.p5
+				);
+			} else {
+				morphSent =
+				    this->surface->setRegionMorphSpring(morph.regionId, morph.p1, morph.p2, morph.p3);
+			}
+		}
+
 		// TahoeGlass regions are double-buffered with wl_surface state. The
 		// region requests above are otherwise only picked up on the next Qt
 		// buffer commit, which can make panels appear to "fix" their glass
 		// geometry only after a hover or animation triggers a repaint.
-		if (changed) {
+		//
+		// When a region morph was queued this frame, skip the explicit commit:
+		// the morph is anchored on the region geometry change and must land in
+		// the same wl_surface commit as the re-laid-out content buffer. The
+		// content retarget that queues a morph always dirties the scene, so
+		// the scenegraph commits this frame and carries regions + morph
+		// atomically; an early commit here would morph the old buffer for one
+		// visible frame.
+		if (changed && !morphSent) {
 			this->mWaylandWindow->commit();
 		}
 		this->setAvailable(true);
 		this->clearFallback();
 	} else {
+		this->pendingMorph.reset();
 		this->setAvailable(false);
 		this->updateFallback(logicalRegions);
 	}
@@ -737,9 +869,20 @@ void TahoeGlass::regionsReplace(
 }
 
 void TahoeGlass::setAvailable(bool available) {
-	if (available == this->mAvailable) return;
+	// transformAvailable derives from protocol presence AND the bound version
+	// carrying the v4 presentation-transform requests; recompute on every
+	// availability edge so shells can gate their legacy animation fallbacks.
+	// Commit both states before emitting so handlers observe a consistent
+	// snapshot regardless of which signal they react to.
+	const auto transformAvailable =
+	    available && this->surface != nullptr && this->surface->supportsTransform();
+	const auto availableEdge = available != this->mAvailable;
+	const auto transformEdge = transformAvailable != this->mTransformAvailable;
 	this->mAvailable = available;
-	emit this->availableChanged();
+	this->mTransformAvailable = transformAvailable;
+
+	if (availableEdge) emit this->availableChanged();
+	if (transformEdge) emit this->transformAvailableChanged();
 }
 
 void TahoeGlass::clearFallback() {

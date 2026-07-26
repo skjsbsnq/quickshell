@@ -1,7 +1,9 @@
 #include "surface.hpp"
 
+#include <qdebug.h>
 #include <qglobal.h>
 #include <qhash.h>
+#include <qlogging.h>
 #include <qset.h>
 #include <qwayland-tahoe-glass-v1.h>
 
@@ -181,6 +183,133 @@ bool TahoeGlassSurface::setRegions(const QList<TahoeGlassRegionState>& regions) 
 	}
 
 	this->mRegions = diff.nextRegions;
+	return true;
+}
+
+bool TahoeGlassSurface::supportsTransform() const {
+	return this->isInitialized()
+	    && this->QtWayland::tahoe_glass_surface_v1::version()
+	           >= TAHOE_GLASS_SURFACE_V1_SET_TRANSFORM_SINCE_VERSION;
+}
+
+bool TahoeGlassSurface::ensureTransformSupported(const char* request) const {
+	if (this->supportsTransform()) return true;
+
+	static bool warned = false;
+	if (!warned) {
+		warned = true;
+		qWarning() << "tahoe_glass_surface_v1 request" << request << "needs protocol version"
+		           << TAHOE_GLASS_SURFACE_V1_SET_TRANSFORM_SINCE_VERSION
+		           << "- compositor bound an older version; presentation transforms disabled";
+	}
+	return false;
+}
+
+bool TahoeGlassSurface::setTransform(qreal x, qreal y, qreal scaleX, qreal scaleY) {
+	if (!this->ensureTransformSupported("set_transform")) return false;
+
+	this->set_transform(
+	    wl_fixed_from_double(x),
+	    wl_fixed_from_double(y),
+	    wl_fixed_from_double(scaleX),
+	    wl_fixed_from_double(scaleY)
+	);
+	return true;
+}
+
+bool TahoeGlassSurface::setTransformTargetSpring(
+    qreal x,
+    qreal y,
+    qreal scaleX,
+    qreal scaleY,
+    qreal dampingRatio,
+    qreal stiffness,
+    qreal epsilon
+) {
+	if (!this->ensureTransformSupported("set_transform_target")) return false;
+
+	this->set_transform_target(
+	    wl_fixed_from_double(x),
+	    wl_fixed_from_double(y),
+	    wl_fixed_from_double(scaleX),
+	    wl_fixed_from_double(scaleY),
+	    transform_curve_spring,
+	    wl_fixed_from_double(dampingRatio),
+	    wl_fixed_from_double(stiffness),
+	    wl_fixed_from_double(epsilon),
+	    wl_fixed_from_double(0.0),
+	    wl_fixed_from_double(0.0)
+	);
+	return true;
+}
+
+bool TahoeGlassSurface::setTransformTargetEased(
+    qreal x,
+    qreal y,
+    qreal scaleX,
+    qreal scaleY,
+    qreal durationMs,
+    qreal x1,
+    qreal y1,
+    qreal x2,
+    qreal y2
+) {
+	if (!this->ensureTransformSupported("set_transform_target")) return false;
+
+	this->set_transform_target(
+	    wl_fixed_from_double(x),
+	    wl_fixed_from_double(y),
+	    wl_fixed_from_double(scaleX),
+	    wl_fixed_from_double(scaleY),
+	    transform_curve_eased,
+	    wl_fixed_from_double(durationMs),
+	    wl_fixed_from_double(x1),
+	    wl_fixed_from_double(y1),
+	    wl_fixed_from_double(x2),
+	    wl_fixed_from_double(y2)
+	);
+	return true;
+}
+
+bool TahoeGlassSurface::setRegionMorphSpring(
+    quint32 regionId,
+    qreal dampingRatio,
+    qreal stiffness,
+    qreal epsilon
+) {
+	if (!this->ensureTransformSupported("set_region_morph")) return false;
+
+	this->set_region_morph(
+	    regionId,
+	    transform_curve_spring,
+	    wl_fixed_from_double(dampingRatio),
+	    wl_fixed_from_double(stiffness),
+	    wl_fixed_from_double(epsilon),
+	    wl_fixed_from_double(0.0),
+	    wl_fixed_from_double(0.0)
+	);
+	return true;
+}
+
+bool TahoeGlassSurface::setRegionMorphEased(
+    quint32 regionId,
+    qreal durationMs,
+    qreal x1,
+    qreal y1,
+    qreal x2,
+    qreal y2
+) {
+	if (!this->ensureTransformSupported("set_region_morph")) return false;
+
+	this->set_region_morph(
+	    regionId,
+	    transform_curve_eased,
+	    wl_fixed_from_double(durationMs),
+	    wl_fixed_from_double(x1),
+	    wl_fixed_from_double(y1),
+	    wl_fixed_from_double(x2),
+	    wl_fixed_from_double(y2)
+	);
 	return true;
 }
 

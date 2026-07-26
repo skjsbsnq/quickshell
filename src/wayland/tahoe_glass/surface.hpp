@@ -57,7 +57,42 @@ public:
 
 	[[nodiscard]] bool setRegions(const QList<TahoeGlassRegionState>& regions);
 
+	/// Whether the compositor bound this surface at protocol version 4+,
+	/// i.e. the presentation-transform requests below are usable.
+	[[nodiscard]] bool supportsTransform() const;
+
+	/// v4 presentation-transform requests. All are double-buffered server
+	/// side (applied on the next wl_surface commit) and return false without
+	/// sending anything when the bound version is below 4.
+	bool setTransform(qreal x, qreal y, qreal scaleX, qreal scaleY);
+	bool setTransformTargetSpring(
+	    qreal x,
+	    qreal y,
+	    qreal scaleX,
+	    qreal scaleY,
+	    qreal dampingRatio,
+	    qreal stiffness,
+	    qreal epsilon
+	);
+	bool setTransformTargetEased(
+	    qreal x,
+	    qreal y,
+	    qreal scaleX,
+	    qreal scaleY,
+	    qreal durationMs,
+	    qreal x1,
+	    qreal y1,
+	    qreal x2,
+	    qreal y2
+	);
+	bool
+	setRegionMorphSpring(quint32 regionId, qreal dampingRatio, qreal stiffness, qreal epsilon);
+	bool
+	setRegionMorphEased(quint32 regionId, qreal durationMs, qreal x1, qreal y1, qreal x2, qreal y2);
+
 private:
+	bool ensureTransformSupported(const char* request) const;
+
 	/// Canonical unique-id region state matching the last protocol content.
 	QList<TahoeGlassRegionState> mRegions;
 };

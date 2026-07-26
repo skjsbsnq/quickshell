@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 
 #ifdef QS_TEST
 class TestTransformLifecycle;
@@ -204,6 +205,9 @@ class TahoeGlass: public AttachedSurfaceLifecycle {
 	Q_PROPERTY(QQmlListProperty<TahoeGlassRegion> regions READ regions NOTIFY regionsChanged);
 	Q_PROPERTY(bool available READ available NOTIFY availableChanged);
 	Q_PROPERTY(
+	    bool transformAvailable READ transformAvailable NOTIFY transformAvailableChanged
+	);
+	Q_PROPERTY(
 	    bool fallbackEnabled READ fallbackEnabled WRITE setFallbackEnabled NOTIFY
 	        fallbackEnabledChanged
 	);
@@ -216,14 +220,63 @@ public:
 
 	QQmlListProperty<TahoeGlassRegion> regions();
 	[[nodiscard]] bool available() const;
+	[[nodiscard]] bool transformAvailable() const;
 	[[nodiscard]] bool fallbackEnabled() const;
 	void setFallbackEnabled(bool enabled);
+
+	/// Presentation-transform requests (protocol v4). All return false and do
+	/// nothing when transformAvailable is false, so callers can fall back to
+	/// their legacy client-side animation paths.
+	///
+	/// The send* variants fire the request and commit immediately: use them
+	/// for transforms with no accompanying content change (e.g. dock autohide
+	/// slide targets).
+	Q_INVOKABLE bool sendTransform(qreal x, qreal y, qreal scaleX, qreal scaleY);
+	Q_INVOKABLE bool sendTransformTargetSpring(
+	    qreal x,
+	    qreal y,
+	    qreal scaleX,
+	    qreal scaleY,
+	    qreal dampingRatio,
+	    qreal stiffness,
+	    qreal epsilon
+	);
+	Q_INVOKABLE bool sendTransformTargetEased(
+	    qreal x,
+	    qreal y,
+	    qreal scaleX,
+	    qreal scaleY,
+	    qreal durationMs,
+	    qreal x1,
+	    qreal y1,
+	    qreal x2,
+	    qreal y2
+	);
+
+	/// Queue a region-anchored container morph (protocol v4). The request is
+	/// sent during the next polish, after region updates, and deliberately
+	/// suppresses the explicit polish commit for that frame: the morph must
+	/// ride the scenegraph buffer commit so [new content + new region + morph]
+	/// land in one atomic wl_surface commit. Committing earlier would apply
+	/// the morph to the previous buffer for one visible frame. Call in the
+	/// same tick as the content/region retarget. Last queued morph wins.
+	Q_INVOKABLE bool
+	queueRegionMorphSpring(quint32 regionId, qreal dampingRatio, qreal stiffness, qreal epsilon);
+	Q_INVOKABLE bool queueRegionMorphEased(
+	    quint32 regionId,
+	    qreal durationMs,
+	    qreal x1,
+	    qreal y1,
+	    qreal x2,
+	    qreal y2
+	);
 
 	static TahoeGlass* qmlAttachedProperties(QObject* object);
 
 signals:
 	void regionsChanged();
 	void availableChanged();
+	void transformAvailableChanged();
 	void fallbackEnabledChanged();
 
 private slots:
@@ -241,6 +294,7 @@ private:
 	regionsReplace(QQmlListProperty<TahoeGlassRegion>* prop, qsizetype i, TahoeGlassRegion* region);
 
 	void setAvailable(bool available);
+	impl::TahoeGlassSurface* ensureSurface();
 	void clearFallback();
 	void updateFallback(const QList<impl::TahoeGlassRegionState>& regions);
 
@@ -271,11 +325,23 @@ private:
 
 	bool pendingRegions = false;
 	bool mAvailable = false;
+	bool mTransformAvailable = false;
 	bool mFallbackEnabled = true;
 	QList<TahoeGlassRegion*> mRegions;
 	std::unique_ptr<impl::TahoeGlassSurface> surface;
 	background_effect::BackgroundEffect* fallbackEffect = nullptr;
 	PendingRegion* fallbackRegion = nullptr;
+
+	struct PendingMorph {
+		quint32 regionId = 0;
+		bool eased = false;
+		qreal p1 = 0.0;
+		qreal p2 = 0.0;
+		qreal p3 = 0.0;
+		qreal p4 = 0.0;
+		qreal p5 = 0.0;
+	};
+	std::optional<PendingMorph> pendingMorph;
 };
 
 } // namespace qs::wayland::tahoe_glass
