@@ -495,6 +495,9 @@ void ProxyWindowBase::setUpdatesEnabled(bool updatesEnabled) {
 
 	if (this->window != nullptr) {
 		QQuickWindowPrivate::get(this->window)->updatesEnabled = updatesEnabled;
+		// Re-enable must schedule a frame: dirty items accumulated while frozen
+		// otherwise stay unpainted until an unrelated expose/resize.
+		if (updatesEnabled) this->window->update();
 	}
 
 	emit this->updatesEnabledChanged();
