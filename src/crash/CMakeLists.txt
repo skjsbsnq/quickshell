@@ -2,6 +2,7 @@ qt_add_library(quickshell-crash STATIC
 	main.cpp
 	interface.cpp
 	handler.cpp
+	write_all.cpp
 )
 
 qs_pch(quickshell-crash SET large)
@@ -54,3 +55,8 @@ endif ()
 target_link_libraries(quickshell-crash PRIVATE quickshell-build Qt::Quick Qt::Widgets cpptrace::cpptrace)
 
 target_link_libraries(quickshell PRIVATE quickshell-crash)
+
+if (BUILD_TESTING)
+	# write_all tests compile write_all.cpp directly (Qt::Test only).
+	add_subdirectory(test)
+endif()

@@ -19,6 +19,7 @@
 
 #include "../core/instanceinfo.hpp"
 #include "../core/logcat.hpp"
+#include "write_all.hpp"
 
 extern char** environ; // NOLINT
 
@@ -74,17 +75,15 @@ void signalHandler(
 			auto frame = cpptrace::safe_object_frame();
 			cpptrace::get_safe_object_frame(traceBuffer[i], &frame);
 
-			auto* wptr = reinterpret_cast<char*>(&frame);
-			auto* end = wptr + sizeof(cpptrace::safe_object_frame); // NOLINT
-			while (wptr != end) {
-				auto r = write(CrashInfo::INSTANCE.traceFd, &frame, sizeof(cpptrace::safe_object_frame));
-				if (r < 0 && errno == EINTR) continue;
-				if (r <= 0) goto fail;
-				wptr += r; // NOLINT
+			// Resume from the unwritten tail; never rewrite the frame prefix (F-04).
+			if (!writeAll(
+			        CrashInfo::INSTANCE.traceFd,
+			        &frame,
+			        sizeof(cpptrace::safe_object_frame)
+			    )) {
+				break;
 			}
 		}
-
-	fail:;
 	}
 
 	// TODO: coredump fork and crash reporter remain as zombies, fix

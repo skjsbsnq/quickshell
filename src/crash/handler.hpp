@@ -3,6 +3,7 @@
 #include <qtclasshelpermacros.h>
 
 #include "../core/instanceinfo.hpp"
+
 namespace qs::crash {
 
 class CrashHandler {
