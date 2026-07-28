@@ -1,7 +1,9 @@
 #pragma once
 
+#include <qcolor.h>
 #include <qcontainerfwd.h>
 #include <qobjectdefs.h>
+#include <qstring.h>
 #include <qtclasshelpermacros.h>
 #include <qtypes.h>
 
@@ -27,9 +29,26 @@ public:
 	[[nodiscard]] virtual QString toString(void* /*slot*/) const { return ""; }
 	[[nodiscard]] virtual void* createStorage() const { return nullptr; }
 	virtual void destroyStorage(void* /*slot*/) const {}
-	void* copyStorage(const void* data) const;
+	// Type-correct deep copy. Must match createStorage/destroyStorage element type.
+	[[nodiscard]] virtual void* copyStorage(const void* data) const;
 
 	static const IpcType* ipcType(const QMetaType& metaType);
+};
+
+// Value types share one typed storage implementation so size / create / destroy /
+// copy cannot drift apart the way ColorIpcType once did (sizeof(QColor) vs new bool).
+template <typename T>
+class ValueIpcType: public IpcType {
+public:
+	[[nodiscard]] qsizetype size() const final { return static_cast<qsizetype>(sizeof(T)); }
+
+	[[nodiscard]] void* createStorage() const final { return new T(); }
+
+	void destroyStorage(void* slot) const final { delete static_cast<T*>(slot); }
+
+	[[nodiscard]] void* copyStorage(const void* data) const final {
+		return new T(*static_cast<const T*>(data));
+	}
 };
 
 class IpcTypeSlot {
@@ -62,67 +81,52 @@ public:
 	static const VoidIpcType INSTANCE;
 };
 
-class StringIpcType: public IpcType {
+class StringIpcType: public ValueIpcType<QString> {
 public:
 	[[nodiscard]] const char* name() const override;
 	[[nodiscard]] const char* genericArgumentName() const override;
-	[[nodiscard]] qsizetype size() const override;
 	[[nodiscard]] void* fromString(const QString& string) const override;
 	[[nodiscard]] QString toString(void* slot) const override;
-	[[nodiscard]] void* createStorage() const override;
-	void destroyStorage(void* slot) const override;
 
 	static const StringIpcType INSTANCE;
 };
 
-class IntIpcType: public IpcType {
+class IntIpcType: public ValueIpcType<int> {
 public:
 	[[nodiscard]] const char* name() const override;
 	[[nodiscard]] const char* genericArgumentName() const override;
-	[[nodiscard]] qsizetype size() const override;
 	[[nodiscard]] void* fromString(const QString& string) const override;
 	[[nodiscard]] QString toString(void* slot) const override;
-	[[nodiscard]] void* createStorage() const override;
-	void destroyStorage(void* slot) const override;
 
 	static const IntIpcType INSTANCE;
 };
 
-class BoolIpcType: public IpcType {
+class BoolIpcType: public ValueIpcType<bool> {
 public:
 	[[nodiscard]] const char* name() const override;
 	[[nodiscard]] const char* genericArgumentName() const override;
-	[[nodiscard]] qsizetype size() const override;
 	[[nodiscard]] void* fromString(const QString& string) const override;
 	[[nodiscard]] QString toString(void* slot) const override;
-	[[nodiscard]] void* createStorage() const override;
-	void destroyStorage(void* slot) const override;
 
 	static const BoolIpcType INSTANCE;
 };
 
-class DoubleIpcType: public IpcType {
+class DoubleIpcType: public ValueIpcType<double> {
 public:
 	[[nodiscard]] const char* name() const override;
 	[[nodiscard]] const char* genericArgumentName() const override;
-	[[nodiscard]] qsizetype size() const override;
 	[[nodiscard]] void* fromString(const QString& string) const override;
 	[[nodiscard]] QString toString(void* slot) const override;
-	[[nodiscard]] void* createStorage() const override;
-	void destroyStorage(void* slot) const override;
 
 	static const DoubleIpcType INSTANCE;
 };
 
-class ColorIpcType: public IpcType {
+class ColorIpcType: public ValueIpcType<QColor> {
 public:
 	[[nodiscard]] const char* name() const override;
 	[[nodiscard]] const char* genericArgumentName() const override;
-	[[nodiscard]] qsizetype size() const override;
 	[[nodiscard]] void* fromString(const QString& string) const override;
 	[[nodiscard]] QString toString(void* slot) const override;
-	[[nodiscard]] void* createStorage() const override;
-	void destroyStorage(void* slot) const override;
 
 	static const ColorIpcType INSTANCE;
 };
