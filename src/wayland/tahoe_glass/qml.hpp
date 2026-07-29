@@ -6,6 +6,7 @@
 #ifdef QS_TEST
 class TestTransformLifecycle;
 class TestFallbackAlpha;
+class TestCommitAtomicity;
 #endif
 
 #include <private/qquickitemchangelistener_p.h>
@@ -283,6 +284,7 @@ private slots:
 	void onRegionDestroyed();
 	void updateRegions();
 	void onWindowPolished();
+	void onFrameSwapped();
 
 private:
 	static void regionsAppend(QQmlListProperty<TahoeGlassRegion>* prop, TahoeGlassRegion* region);
@@ -297,6 +299,13 @@ private:
 	impl::TahoeGlassSurface* ensureSurface();
 	void clearFallback();
 	void updateFallback(const QList<impl::TahoeGlassRegionState>& regions);
+
+	/// Commit the pending region/transform state to the wl_surface only when
+	/// no render cycle is in flight. See the implementation for the rationale;
+	/// the three sendTransform* invokables and the onWindowPolished region
+	/// commit all go through here so the "defer to the render-thread buffer
+	/// commit when a repaint is queued" rule has a single source of truth.
+	void commitGlassIfIdle();
 
 #ifdef QS_TEST
 	// Task 20: test-only observation of the fallback owner (not QML-facing).
@@ -313,6 +322,16 @@ private:
 	[[nodiscard]] PendingRegion* fallbackRegionForTest() const;
 	[[nodiscard]] QObject* fallbackEffectObjectForTest() const;
 	[[nodiscard]] PendingRegion* fallbackEffectBlurRegionForTest() const;
+
+	// Task 17: test-only observation of the commit-deferral state machine.
+	// UpdateRequest marks a repaint in flight, frameSwapped clears it, and
+	// commitGlassIfIdle commits only when idle. Production builds omit these.
+	friend class ::TestCommitAtomicity;
+	void setRepaintInFlightForTest(bool inFlight) { this->mRepaintInFlight = inFlight; }
+	[[nodiscard]] bool repaintInFlightForTest() const { return this->mRepaintInFlight; }
+	void commitGlassIfIdleForTest() { this->commitGlassIfIdle(); }
+	void emitFrameSwappedForTest() { this->onFrameSwapped(); }
+	[[nodiscard]] int explicitCommitCountForTest() const { return this->mExplicitCommitCount; }
 #endif
 
 	void backingWindowConnected() override;
@@ -324,6 +343,13 @@ private:
 	bool filteredWindowEvent(QObject* object, QEvent* event) override;
 
 	bool pendingRegions = false;
+	/// True between a QEvent::UpdateRequest and the matching
+	/// QQuickWindow::frameSwapped, i.e. while a render cycle is in flight and
+	/// the scene graph is about to (or just did) commit a buffer. While set,
+	/// commit sites defer their explicit wl_surface commit so the pending
+	/// region/transform state rides the render-thread buffer commit in the
+	/// same atomic commit as the new content (see commitGlassIfIdle).
+	bool mRepaintInFlight = false;
 	bool mAvailable = false;
 	bool mTransformAvailable = false;
 	bool mFallbackEnabled = true;
@@ -342,6 +368,13 @@ private:
 		qreal p5 = 0.0;
 	};
 	std::optional<PendingMorph> pendingMorph;
+#ifdef QS_TEST
+	/// Test-only diagnostic: number of explicit (non-deferred) wl_surface
+	/// commits issued by commitGlassIfIdle. Production builds never read it
+	/// (and never compile it); it exists only to assert the defer/commit
+	/// decision without a live Wayland surface.
+	int mExplicitCommitCount = 0;
+#endif
 };
 
 } // namespace qs::wayland::tahoe_glass

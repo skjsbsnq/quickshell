@@ -14,6 +14,7 @@
 #include <qqml.h>
 #include <qqmllist.h>
 #include <qquickitem.h>
+#include <qquickwindow.h>
 #include <qrect.h>
 #include <qtmetamacros.h>
 #include <qvariant.h>
@@ -540,9 +541,12 @@ bool TahoeGlass::sendTransform(qreal x, qreal y, qreal scaleX, qreal scaleY) {
 	auto* surface = this->ensureSurface();
 	if (!surface || !surface->setTransform(x, y, scaleX, scaleY)) return false;
 
-	// Transform requests are double-buffered; with no accompanying content
-	// change nothing else would commit, so commit explicitly.
-	this->mWaylandWindow->commit();
+	// Transform requests are double-buffered wl_surface pending state. With
+	// no accompanying content change nothing else would commit, so commit
+	// explicitly when idle. When a repaint is in flight, defer to the scene
+	// graph's buffer commit so the transform lands in the same atomic
+	// wl_surface commit as the new content instead of the previous buffer.
+	this->commitGlassIfIdle();
 	return true;
 }
 
@@ -562,7 +566,7 @@ bool TahoeGlass::sendTransformTargetSpring(
 		return false;
 	}
 
-	this->mWaylandWindow->commit();
+	this->commitGlassIfIdle();
 	return true;
 }
 
@@ -584,7 +588,7 @@ bool TahoeGlass::sendTransformTargetEased(
 		return false;
 	}
 
-	this->mWaylandWindow->commit();
+	this->commitGlassIfIdle();
 	return true;
 }
 
@@ -641,6 +645,7 @@ void TahoeGlass::platformSurfaceAboutToBeDestroyed() {
 	this->surface = nullptr;
 	this->pendingRegions = false;
 	this->pendingMorph.reset();
+	this->mRepaintInFlight = false;
 	this->setAvailable(false);
 	this->clearFallback();
 }
@@ -651,8 +656,14 @@ bool TahoeGlass::filteredWindowEvent(QObject* object, QEvent* event) {
 		// This is crucial for niri compositor where window moves may not emit signals
 		this->updateRegions();
 	} else if (event->type() == QEvent::UpdateRequest) {
-		// Also update on frame requests to ensure blur stays synchronized
-		// with window position during animations/transitions
+		// A render cycle is starting: the scene graph is about to commit a
+		// buffer this frame. Mark a repaint in flight so commit sites defer
+		// their explicit wl_surface commit and let the pending region/
+		// transform state ride the render-thread buffer commit atomically
+		// (committing early would latch the new state against the previous
+		// buffer for one visible frame). Cleared by onFrameSwapped. Also
+		// re-arm region updates if a polish is still pending.
+		this->mRepaintInFlight = true;
 		if (this->pendingRegions) {
 			this->updateRegions();
 		}
@@ -666,6 +677,21 @@ void TahoeGlass::backingWindowConnected() {
 	QObject::connect(this->mWindow, &QWindow::yChanged, this, &TahoeGlass::updateRegions);
 	QObject::connect(this->mWindow, &QWindow::widthChanged, this, &TahoeGlass::updateRegions);
 	QObject::connect(this->mWindow, &QWindow::heightChanged, this, &TahoeGlass::updateRegions);
+
+	// frameSwapped fires on the GUI thread once the scene graph has committed
+	// the frame's buffer. That commit carries any pending region/transform
+	// state we set during polish in the same atomic wl_surface commit as the
+	// new content, so the repaint-in-flight flag is no longer needed and the
+	// next idle update can commit explicitly again. Without this the flag
+	// would stay set and idle metadata/transform updates would never land.
+	if (auto* quickWindow = qobject_cast<QQuickWindow*>(this->mWindow)) {
+		QObject::connect(
+		    quickWindow,
+		    &QQuickWindow::frameSwapped,
+		    this,
+		    &TahoeGlass::onFrameSwapped
+		);
+	}
 }
 
 void TahoeGlass::waylandWindowDestroyed() {
@@ -698,6 +724,12 @@ void TahoeGlass::waylandSurfaceCreated() {
 	this->setAttachedObject("qs_tahoe_glass", this);
 	this->setAvailable(this->surface != nullptr);
 	this->pendingRegions = true;
+	// A fresh surface starts with no render in flight; the upcoming show will
+	// post its own UpdateRequest and set the flag again. Resetting here also
+	// covers a surface recreate that skips waylandSurfaceDestroyed (e.g. a
+	// render aborted between UpdateRequest and frameSwapped), so the first
+	// region update is never deferred on a stale flag.
+	this->mRepaintInFlight = false;
 	this->schedulePolish();
 
 	if (prev && !prev->proxyWindow && (this->surface || !prev->fallbackEffect)) {
@@ -709,6 +741,7 @@ void TahoeGlass::waylandSurfaceDestroyed() {
 	this->surface = nullptr;
 	this->pendingRegions = false;
 	this->pendingMorph.reset();
+	this->mRepaintInFlight = false;
 	this->setAvailable(false);
 	this->clearFallback();
 
@@ -781,20 +814,22 @@ void TahoeGlass::onWindowPolished() {
 			}
 		}
 
-		// TahoeGlass regions are double-buffered with wl_surface state. The
-		// region requests above are otherwise only picked up on the next Qt
-		// buffer commit, which can make panels appear to "fix" their glass
-		// geometry only after a hover or animation triggers a repaint.
+		// TahoeGlass regions are double-buffered wl_surface pending state.
+		// They are otherwise only applied on the next wl_surface commit. During
+		// a render cycle the scene graph commits a new buffer that carries the
+		// region atomically in the same commit as the new content; committing
+		// here first would latch the new region against the previous buffer
+		// for one visible frame (the "region leads the buffer" defect that the
+		// niri compositor clamps around — commit 42039bb).
 		//
-		// When a region morph was queued this frame, skip the explicit commit:
-		// the morph is anchored on the region geometry change and must land in
-		// the same wl_surface commit as the re-laid-out content buffer. The
-		// content retarget that queues a morph always dirties the scene, so
-		// the scenegraph commits this frame and carries regions + morph
-		// atomically; an early commit here would morph the old buffer for one
-		// visible frame.
+		// Skip the explicit commit while a repaint is in flight so the render
+		// thread carries the region, and always skip it when a region morph
+		// was queued this frame: the morph is anchored on the content/region
+		// change and must land in the same commit as the new content buffer,
+		// so it must never be committed early against the old buffer (when
+		// idle it simply waits for the next render commit to carry it).
 		if (changed && !morphSent) {
-			this->mWaylandWindow->commit();
+			this->commitGlassIfIdle();
 		}
 		this->setAvailable(true);
 		this->clearFallback();
@@ -803,6 +838,39 @@ void TahoeGlass::onWindowPolished() {
 		this->setAvailable(false);
 		this->updateFallback(logicalRegions);
 	}
+}
+
+void TahoeGlass::onFrameSwapped() {
+	// The scene graph has committed this frame's buffer, so any pending
+	// region/transform state set during polish has been carried atomically.
+	// Drop the in-flight flag so the next idle update can commit explicitly
+	// again — without this it would defer forever and idle metadata/transform
+	// updates (no accompanying content change) would never reach the compositor.
+	this->mRepaintInFlight = false;
+}
+
+void TahoeGlass::commitGlassIfIdle() {
+	// Region/transform requests are double-buffered wl_surface pending state,
+	// applied on the next wl_surface commit. The scene graph commits one
+	// buffer per render cycle, and that commit carries this pending state in
+	// the same atomic commit as the new content. Committing here while a
+	// repaint is in flight would instead apply the new region/transform to the
+	// *previous* buffer for one visible frame — the "region leads the buffer"
+	// defect upstream of the niri compositor clamp (42039bb).
+	//
+	// So: defer to the render-thread buffer commit whenever a repaint is in
+	// flight (flag set by QEvent::UpdateRequest, cleared by frameSwapped), and
+	// only commit explicitly when the window is idle, so pure metadata/
+	// transform updates with no accompanying content change still land promptly.
+	if (this->mRepaintInFlight) return;
+#ifdef QS_TEST
+	++this->mExplicitCommitCount;
+#endif
+	// Callers ensure mWaylandWindow is non-null (the invokables go through
+	// ensureSurface, and onWindowPolished early-returns otherwise); the guard
+	// keeps the helper self-contained and safe to invoke before the surface
+	// is live.
+	if (this->mWaylandWindow) this->mWaylandWindow->commit();
 }
 
 void TahoeGlass::regionsAppend(QQmlListProperty<TahoeGlassRegion>* prop, TahoeGlassRegion* region) {
