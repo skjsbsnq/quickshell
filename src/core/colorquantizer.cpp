@@ -26,7 +26,7 @@ QS_LOGGING_CATEGORY(logColorQuantizer, "quickshell.colorquantizer", QtWarningMsg
 }
 
 ColorQuantizerOperation::ColorQuantizerOperation(
-    QUrl* source,
+    QUrl source,
     qreal depth,
     QRect imageRect,
     qreal rescaleSize
@@ -38,12 +38,12 @@ ColorQuantizerOperation::ColorQuantizerOperation(
 	this->setAutoDelete(false);
 }
 
-void ColorQuantizerOperation::quantizeImage(const QAtomicInteger<bool>& shouldCancel) {
-	if (shouldCancel.loadAcquire() || this->source->isEmpty()) return;
+void ColorQuantizerOperation::quantizeImage() {
+	if (this->shouldCancel.loadAcquire() || this->source.isEmpty()) return;
 
 	this->colors.clear();
 
-	auto image = QImage(this->source->toLocalFile());
+	auto image = QImage(this->source.toLocalFile());
 
 	if (this->imageRect.isValid()) {
 		image = image.copy(this->imageRect);
@@ -61,7 +61,7 @@ void ColorQuantizerOperation::quantizeImage(const QAtomicInteger<bool>& shouldCa
 	}
 
 	if (image.isNull()) {
-		qCWarning(logColorQuantizer) << "Failed to load image from" << this->source->toString();
+		qCWarning(logColorQuantizer) << "Failed to load image from" << this->source.toString();
 		return;
 	}
 
@@ -84,12 +84,8 @@ void ColorQuantizerOperation::quantizeImage(const QAtomicInteger<bool>& shouldCa
 	qCDebug(logColorQuantizer) << "Color Quantization took: " << milliseconds << "ms";
 }
 
-QList<QColor> ColorQuantizerOperation::quantization(
-    QList<QColor>& rgbValues,
-    qreal depth,
-    const QAtomicInteger<bool>& shouldCancel
-) {
-	if (shouldCancel.loadAcquire()) return QList<QColor>();
+QList<QColor> ColorQuantizerOperation::quantization(QList<QColor>& rgbValues, qreal depth) {
+	if (this->shouldCancel.loadAcquire()) return QList<QColor>();
 
 	if (depth >= this->maxDepth || rgbValues.isEmpty()) {
 		if (rgbValues.isEmpty()) return QList<QColor>();
@@ -99,7 +95,7 @@ QList<QColor> ColorQuantizerOperation::quantization(
 		auto totalB = 0;
 
 		for (const auto& color: rgbValues) {
-			if (shouldCancel.loadAcquire()) return QList<QColor>();
+			if (this->shouldCancel.loadAcquire()) return QList<QColor>();
 
 			totalR += color.red();
 			totalG += color.green();
@@ -246,7 +242,7 @@ void ColorQuantizer::quantizeAsync() {
 	qCDebug(logColorQuantizer) << "Starting color quantization asynchronously";
 
 	this->liveOperation = new ColorQuantizerOperation(
-	    &this->mSource,
+	    this->mSource,
 	    this->mDepth,
 	    this->mImageRect,
 	    this->mRescaleSize
@@ -265,9 +261,15 @@ void ColorQuantizer::quantizeAsync() {
 void ColorQuantizer::cancelAsync() {
 	if (!this->liveOperation) return;
 
+	// Discard the result and stop tracking the operation. The operation still
+	// self-deletes via its deferred finished() slot (queued from the worker by
+	// finishRun()), so there is nothing to wait for here.
+	//
+	// Do NOT call QThreadPool::globalInstance()->waitForDone(): that blocks the
+	// GUI thread on the *global* pool (every other quickshell background job),
+	// freezing the whole shell for as long as the slowest pending task runs --
+	// visible as a frame-drop spike on every wallpaper change.
 	this->liveOperation->tryCancel();
-	QThreadPool::globalInstance()->waitForDone();
-
 	QObject::disconnect(this->liveOperation, nullptr, this, nullptr);
 	this->liveOperation = nullptr;
 }

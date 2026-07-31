@@ -17,7 +17,7 @@ class ColorQuantizerOperation
 	Q_OBJECT;
 
 public:
-	explicit ColorQuantizerOperation(QUrl* source, qreal depth, QRect imageRect, qreal rescaleSize);
+	explicit ColorQuantizerOperation(QUrl source, qreal depth, QRect imageRect, qreal rescaleSize);
 
 	void run() override;
 	void tryCancel();
@@ -31,19 +31,15 @@ private slots:
 private:
 	static char findBiggestColorRange(const QList<QColor>& rgbValues);
 
-	void quantizeImage(const QAtomicInteger<bool>& shouldCancel = false);
+	void quantizeImage();
 
-	QList<QColor> quantization(
-	    QList<QColor>& rgbValues,
-	    qreal depth,
-	    const QAtomicInteger<bool>& shouldCancel = false
-	);
+	QList<QColor> quantization(QList<QColor>& rgbValues, qreal depth);
 
 	void finishRun();
 
 	QAtomicInteger<bool> shouldCancel = false;
 	QList<QColor> colors;
-	QUrl* source;
+	QUrl source;
 	qreal maxDepth;
 	QRect imageRect;
 	qreal rescaleSize;
