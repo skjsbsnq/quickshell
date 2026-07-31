@@ -1,6 +1,7 @@
 #include "agent.hpp"
 
 #include <qdbusconnection.h>
+#include <qdbuspendingcall.h>
 #include <qdbuspendingreply.h>
 #include <qlogging.h>
 #include <qloggingcategory.h>
@@ -28,7 +29,7 @@ void BluetoothAgent::registerAgent() {
 }
 
 bool BluetoothAgent::prepareDevice(const QString& path) {
-	if (!this->agentRegistered) {
+	if (!this->agentRegistered && this->mRegisterWatcher == nullptr) {
 		auto bus = QDBusConnection::systemBus();
 		if (!bus.isConnected()) {
 			qCWarning(logAgent) << "Could not connect to DBus. Bluetooth pairing agent is unavailable.";
@@ -52,17 +53,33 @@ bool BluetoothAgent::prepareDevice(const QString& path) {
 			return false;
 		}
 
+		// Register asynchronously so an unresponsive bluetoothd cannot freeze
+		// the GUI thread (S-L3): the old reply.waitForFinished() blocked up to
+		// the D-Bus timeout (25s). The result is handled when the call
+		// completes; a reentrant prepareDevice() while a registration is in
+		// flight is a no-op (mRegisterWatcher guards it).
 		auto reply = manager.RegisterAgent(QDBusObjectPath(AgentPath), "NoInputNoOutput");
-		reply.waitForFinished();
+		this->mRegisterWatcher = new QDBusPendingCallWatcher(reply, this);
 
-		if (reply.isError()) {
-			qCWarning(logAgent).nospace()
-			    << "Failed to register Bluetooth pairing agent: " << reply.error().message();
-			return false;
-		}
+		QObject::connect(
+		    this->mRegisterWatcher,
+		    &QDBusPendingCallWatcher::finished,
+		    this,
+		    [this](QDBusPendingCallWatcher* watcher) {
+			    const QDBusPendingReply<> reply = *watcher;
 
-		this->agentRegistered = true;
-		qCDebug(logAgent) << "Registered Bluetooth pairing agent";
+			    if (reply.isError()) {
+				    qCWarning(logAgent).nospace()
+				        << "Failed to register Bluetooth pairing agent: " << reply.error().message();
+			    } else {
+				    this->agentRegistered = true;
+				    qCDebug(logAgent) << "Registered Bluetooth pairing agent";
+			    }
+
+			    this->mRegisterWatcher = nullptr;
+			    watcher->deleteLater();
+		    }
+		);
 	}
 
 	this->allowDevice(path);
@@ -165,8 +182,12 @@ void BluetoothAgent::unregisterAgent() {
 	    manager("org.bluez", "/org/bluez", QDBusConnection::systemBus(), this);
 
 	if (manager.isValid()) {
-		auto reply = manager.UnregisterAgent(QDBusObjectPath(AgentPath));
-		reply.waitForFinished();
+		// Fire and forget: the old reply.waitForFinished() blocked the GUI
+		// thread up to the D-Bus timeout when bluetoothd was unresponsive
+		// (S-L3). The UnregisterAgent message is dispatched and the reply is
+		// discarded; this runs from ~BluetoothAgent, where awaiting a reply
+		// (blocking or via a watcher) is not an option anyway.
+		manager.UnregisterAgent(QDBusObjectPath(AgentPath));
 	}
 
 	this->agentRegistered = false;

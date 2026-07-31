@@ -8,6 +8,8 @@
 #include <qtmetamacros.h>
 #include <qtypes.h>
 
+class QDBusPendingCallWatcher;
+
 namespace qs::bluetooth {
 
 class BluetoothAgent
@@ -44,6 +46,7 @@ private:
 	QSet<QString> allowedDevices;
 	bool objectRegistered = false;
 	bool agentRegistered = false;
+	QDBusPendingCallWatcher* mRegisterWatcher = nullptr;
 };
 
 } // namespace qs::bluetooth
