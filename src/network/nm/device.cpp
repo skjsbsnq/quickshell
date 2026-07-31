@@ -61,6 +61,7 @@ void NMDevice::bindFrontend(NetworkDevice* frontend) {
 		case 40 ... 90: return ConnectionState::Connecting;
 		case 100: return ConnectionState::Connected;
 		case 110 ... 120: return ConnectionState::Disconnecting;
+		default: return ConnectionState::Unknown;
 		}
 	};
 	// clang-format off

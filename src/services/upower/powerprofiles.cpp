@@ -170,6 +170,7 @@ QString DBusDataTransform<PowerProfile::Enum>::toWire(Data data) {
 	case PowerProfile::Balanced: return QStringLiteral("balanced");
 	case PowerProfile::Performance: return QStringLiteral("performance");
 	default: qFatal() << "Attempted to convert invalid power profile" << data << "to wire format.";
+		Q_UNREACHABLE();
 	}
 }
 

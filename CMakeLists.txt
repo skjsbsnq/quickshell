@@ -85,7 +85,11 @@ boption(NETWORK "Network" ON)
 include(cmake/install-qml-module.cmake)
 include(cmake/util.cmake)
 
-add_compile_options(-Wall -Wextra -Wno-vla-cxx-extension)
+add_compile_options(-Wall -Wextra)
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+	# clang-only diagnostic; GCC prints an unrecognized-option note for it.
+	add_compile_options(-Wno-vla-cxx-extension)
+endif()
 
 # pipewire defines these, breaking PCH
 add_compile_definitions(_REENTRANT)

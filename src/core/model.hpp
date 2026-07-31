@@ -170,7 +170,17 @@ public:
 	}
 
 	[[nodiscard]] QList<QObject*> values() override {
-		return *reinterpret_cast<QList<QObject*>*>(&this->mValuesList);
+		// Values must be QObject derived (see data()); build the base list
+		// explicitly instead of reinterpreting the QList<T*> storage, which
+		// violates strict aliasing.
+		QList<QObject*> out;
+		out.reserve(this->mValuesList.length());
+		// Same rationale as data(): T is QObject-derived but may be incomplete
+		// at instantiation (ObjectModel<void> is the empty instance), so a
+		// static_cast is not possible — the pointer conversion is safe.
+		for (auto* value: this->mValuesList)
+			out.append(reinterpret_cast<QObject*>(value));
+		return out;
 	}
 
 private:

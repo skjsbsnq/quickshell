@@ -17,7 +17,8 @@ qt_add_qml_module(quickshell-i3
 
 install_qml_module(quickshell-i3)
 
-qs_pch(quickshell-i3)
-qs_pch(quickshell-i3plugin)
+# No PCH reuse: the common/plugin PCH sets are built with Qt::Quick's
+# compile definitions (QT_GUI_LIB etc.), but these targets only link Qt::Qml,
+# so every TU rejects the .gch and GCC warns -Winvalid-pch on each build.
 
 target_link_libraries(quickshell PRIVATE quickshell-i3plugin)

@@ -140,6 +140,13 @@ QJsonObject JsonAdapter::serializeRec(const QObject* obj, const QMetaObject* bas
 				auto jsonVal = QJsonValue::fromVariant(val);
 
 				if (jsonVal.isNull() && !val.isNull() && val.isValid()) {
+					// QSequentialIterable/QAssociativeIterable are deprecated in
+					// Qt 6.9+ ("Use QMetaSequence's iterables and iterators instead");
+					// the replacement API is not exposed publicly in this Qt
+					// version, so suppress the deprecation around these two
+					// functions (upstream has not migrated either).
+					QT_WARNING_PUSH
+					QT_WARNING_DISABLE_DEPRECATED
 					if (val.canConvert<QAssociativeIterable>()) {
 						val.convert(QMetaType::fromType<QVariantMap>());
 					} else if (val.canConvert<QSequentialIterable>()) {
@@ -154,6 +161,7 @@ QJsonObject JsonAdapter::serializeRec(const QObject* obj, const QMetaObject* bas
 		}
 	}
 
+	QT_WARNING_POP
 	return json;
 }
 
@@ -263,6 +271,8 @@ void JsonAdapter::deserializeRec(const QJsonObject& json, QObject* obj, const QM
 				auto variant = jval.toVariant();
 				auto convVariant = variant;
 
+				QT_WARNING_PUSH
+				QT_WARNING_DISABLE_DEPRECATED
 				if (convVariant.convert(prop.metaType())) {
 					prop.write(obj, convVariant);
 				} else {
@@ -291,6 +301,7 @@ void JsonAdapter::deserializeRec(const QJsonObject& json, QObject* obj, const QM
 						                 << jval.toVariant().typeName();
 					}
 				}
+				QT_WARNING_POP
 			}
 		}
 	}

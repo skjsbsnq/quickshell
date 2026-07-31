@@ -1,9 +1,20 @@
 # pch breaks clang-tidy..... somehow
 if (NOT NO_PCH)
-	file(GENERATE
-		OUTPUT ${CMAKE_BINARY_DIR}/pchstub.cpp
-		CONTENT "// intentionally empty"
-	)
+	# pchstub.cpp must be regenerable by the build tool: file(GENERATE) only
+	# writes at cmake configure time, so `ninja -t clean` (or a deleted file)
+	# left the pchset autogen steps without their source and ninja errored with
+	# "missing and no known rule to make it". A custom command gives ninja a
+	# real rule to recreate the stub before any pchset library is built.
+	if (NOT TAHOE_PCHSTUB_RULE)
+		set(TAHOE_PCHSTUB_RULE ON)
+		add_custom_command(
+			OUTPUT ${CMAKE_BINARY_DIR}/pchstub.cpp
+			COMMAND ${CMAKE_COMMAND} -E echo "// intentionally empty" >
+			        ${CMAKE_BINARY_DIR}/pchstub.cpp
+			VERBATIM
+			COMMENT "Generating pchstub.cpp"
+		)
+	endif()
 endif()
 
 function (qs_pch target)

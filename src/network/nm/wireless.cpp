@@ -265,6 +265,7 @@ void NMWirelessDevice::bindFrontend() {
 		case NM80211Mode::Infra: return WifiDeviceMode::Station;
 		case NM80211Mode::Ap: return WifiDeviceMode::AccessPoint;
 		case NM80211Mode::Mesh: return WifiDeviceMode::Mesh;
+		default: return WifiDeviceMode::Unknown;
 		}
 	};
 	frontend->bindableMode().setBinding(translateMode);
