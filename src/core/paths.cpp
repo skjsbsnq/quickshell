@@ -51,13 +51,18 @@ QDir QsPaths::crashDir(const QString& id) {
 }
 
 QString QsPaths::basePath(const QString& id) {
-	auto path = QsPaths::instance()->baseRunDir()->filePath("by-id");
+	auto* baseRunDir = QsPaths::instance()->baseRunDir();
+	if (!baseRunDir) return {};
+
+	auto path = baseRunDir->filePath("by-id");
 	path = QDir(path).filePath(id);
 	return path;
 }
 
 QString QsPaths::ipcPath(const QString& id) {
-	return QDir(QsPaths::basePath(id)).filePath("ipc.sock");
+	auto path = QsPaths::basePath(id);
+	if (path.isEmpty()) return {};
+	return QDir(path).filePath("ipc.sock");
 }
 
 QDir* QsPaths::baseRunDir() {
@@ -82,8 +87,8 @@ QDir* QsPaths::baseRunDir() {
 		}
 	}
 
-	if (this->baseRunState == DirState::Failed) return nullptr;
-	else return &this->mBaseRunDir;
+	if (this->baseRunState != DirState::Ready) return nullptr;
+	return &this->mBaseRunDir;
 }
 
 QDir* QsPaths::shellRunDir() {
@@ -109,8 +114,8 @@ QDir* QsPaths::shellRunDir() {
 		}
 	}
 
-	if (this->shellRunState == DirState::Failed) return nullptr;
-	else return &this->mShellRunDir;
+	if (this->shellRunState != DirState::Ready) return nullptr;
+	return &this->mShellRunDir;
 }
 
 QDir* QsPaths::instanceRunDir() {
@@ -138,8 +143,8 @@ QDir* QsPaths::instanceRunDir() {
 		}
 	}
 
-	if (this->shellRunState == DirState::Failed) return nullptr;
-	else return &this->mInstanceRunDir;
+	if (this->instanceRunState != DirState::Ready) return nullptr;
+	return &this->mInstanceRunDir;
 }
 
 QDir* QsPaths::shellVfsDir() {
@@ -165,13 +170,20 @@ QDir* QsPaths::shellVfsDir() {
 		}
 	}
 
-	if (this->shellVfsState == DirState::Failed) return nullptr;
-	else return &this->mShellVfsDir;
+	if (this->shellVfsState != DirState::Ready) return nullptr;
+	return &this->mShellVfsDir;
 }
 
 void QsPaths::linkRunDir() {
+	auto* baseRunDir = this->baseRunDir();
+	if (!baseRunDir) {
+		qCCritical(logPaths) << "Could not create PID symlink to runtime directory, as the base "
+		                        "runtime directory could not be created.";
+		return;
+	}
+
 	if (auto* runDir = this->instanceRunDir()) {
-		auto pidDir = QDir(this->baseRunDir()->filePath("by-pid"));
+		auto pidDir = QDir(baseRunDir->filePath("by-pid"));
 		auto* shellDir = this->shellRunDir();
 
 		if (!shellDir) {
@@ -220,8 +232,15 @@ void QsPaths::linkRunDir() {
 }
 
 void QsPaths::linkPathDir() {
+	auto* baseRunDir = this->baseRunDir();
+	if (!baseRunDir) {
+		qCCritical(logPaths) << "Could not create path symlink to shell runtime directory, as the "
+		                        "base runtime directory could not be created.";
+		return;
+	}
+
 	if (auto* runDir = this->shellRunDir()) {
-		auto pathDir = QDir(this->baseRunDir()->filePath("by-path"));
+		auto pathDir = QDir(baseRunDir->filePath("by-path"));
 
 		if (!pathDir.mkpath(".")) {
 			qCCritical(logPaths) << "Could not create path symlink directory.";
