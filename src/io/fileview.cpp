@@ -76,8 +76,27 @@ void FileViewOperation::block() {
 
 void FileViewOperation::tryCancel() { this->shouldCancel.storeRelease(true); }
 
+void FileViewOperation::disposePending() {
+	// The operation never ran, so it is still holding its block mutex and
+	// finishRun() will never be called. Release the mutex before deleting.
+	this->blockMutex.unlock();
+	delete this;
+}
+
 void FileViewOperation::finishRun() {
 	this->blockMutex.unlock();
+
+	// The owning FileView may have been destroyed while this worker ran
+	// (destructor disowns the live operation). In that case the queued
+	// completion would rely on an event loop that may never run again (e.g.
+	// process shutdown), leaking this object. Self-delete from the worker
+	// thread instead: no QML/Qt logging happens with a null owner, so
+	// deleting on the worker thread is safe.
+	if (!this->owner) {
+		delete this;
+		return;
+	}
+
 	QMetaObject::invokeMethod(this, &FileViewOperation::finished, Qt::QueuedConnection);
 }
 
@@ -89,8 +108,13 @@ void FileViewOperation::finished() {
 }
 
 void FileViewReader::run() {
-	if (!this->shouldCancel) {
-		FileViewReader::read(this->owner, this->state, this->doStringConversion, this->shouldCancel);
+	if (!this->shouldCancel && this->owner) {
+		FileViewReader::read(
+		    this->owner,
+		    this->state,
+		    this->doStringConversion,
+		    this->shouldCancel
+		);
 
 		if (this->shouldCancel.loadAcquire()) {
 			qCDebug(logFileView) << "Read" << this << "of" << this->state.path << "canceled for"
@@ -102,19 +126,28 @@ void FileViewReader::run() {
 }
 
 void FileViewReader::read(
-    FileView* view,
+    const QPointer<FileView>& view,
     FileViewState& state,
     bool doStringConversion,
     const QAtomicInteger<bool>& shouldCancel
 ) {
 	qCDebug(logFileView) << "Reader started for" << state.path;
 
+	// The owning FileView may have been destroyed while this worker ran. The
+	// QPointer is cleared atomically by ~QObject, so a null check here (and
+	// before every qmlWarning below) keeps QML object access off freed
+	// memory. File I/O and state updates remain valid in that case.
+	if (!view) {
+		state.error = FileViewError::Unknown;
+		return;
+	}
+
 	auto info = QFileInfo(state.path);
 	state.exists = info.exists();
 
 	if (!state.exists) {
 		if (state.printErrors) {
-			qmlWarning(view) << "Read of " << state.path << " failed: File does not exist.";
+			if (view) qmlWarning(view) << "Read of " << state.path << " failed: File does not exist.";
 		}
 
 		state.error = FileViewError::FileNotFound;
@@ -123,14 +156,14 @@ void FileViewReader::read(
 
 	if (!info.isFile()) {
 		if (state.printErrors) {
-			qmlWarning(view) << "Read of " << state.path << " failed: Not a file.";
+			if (view) qmlWarning(view) << "Read of " << state.path << " failed: Not a file.";
 		}
 
 		state.error = FileViewError::NotAFile;
 		return;
 	} else if (!info.isReadable()) {
 		if (state.printErrors) {
-			qmlWarning(view) << "Read of " << state.path << " failed: Permission denied.";
+			if (view) qmlWarning(view) << "Read of " << state.path << " failed: Permission denied.";
 		}
 
 		state.error = FileViewError::PermissionDenied;
@@ -142,7 +175,8 @@ void FileViewReader::read(
 	auto file = QFile(state.path);
 
 	if (!file.open(QFile::ReadOnly)) {
-		qmlWarning(view) << "Read of " << state.path << " failed: Unknown failure when opening file.";
+		if (view) qmlWarning(view) << "Read of " << state.path
+		                           << " failed: Unknown failure when opening file.";
 		state.error = FileViewError::Unknown;
 		return;
 	}
@@ -159,7 +193,7 @@ void FileViewReader::read(
 			auto r = file.read(data.data() + i, data.length() - i); // NOLINT
 
 			if (r == -1) {
-				qmlWarning(view) << "Read of " << state.path << " failed: read() failed.";
+				if (view) qmlWarning(view) << "Read of " << state.path << " failed: read() failed.";
 
 				state.error = FileViewError::Unknown;
 				return;
@@ -182,7 +216,7 @@ void FileViewReader::read(
 			auto r = file.read(buf.data(), buf.size()); // NOLINT
 
 			if (r == -1) {
-				qmlWarning(view) << "Read of " << state.path << " failed: read() failed.";
+				if (view) qmlWarning(view) << "Read of " << state.path << " failed: read() failed.";
 
 				state.error = FileViewError::Unknown;
 				return;
@@ -203,7 +237,7 @@ void FileViewReader::read(
 }
 
 void FileViewWriter::run() {
-	if (!this->shouldCancel.loadAcquire()) {
+	if (!this->shouldCancel.loadAcquire() && this->owner) {
 		FileViewWriter::write(this->owner, this->state, this->doAtomicWrite, this->shouldCancel);
 
 		if (this->shouldCancel.loadAcquire()) {
@@ -216,12 +250,21 @@ void FileViewWriter::run() {
 }
 
 void FileViewWriter::write(
-    FileView* view,
+    const QPointer<FileView>& view,
     FileViewState& state,
     bool doAtomicWrite,
     const QAtomicInteger<bool>& shouldCancel
 ) {
 	qCDebug(logFileView) << "Writer started for" << state.path;
+
+	// The owning FileView may have been destroyed while this worker ran. The
+	// QPointer is cleared atomically by ~QObject, so a null check here (and
+	// before every qmlWarning below) keeps QML object access off freed
+	// memory. File I/O and state updates remain valid in that case.
+	if (!view) {
+		state.error = FileViewError::Unknown;
+		return;
+	}
 
 	auto info = QFileInfo(state.path);
 	state.exists = info.exists();
@@ -230,7 +273,7 @@ void FileViewWriter::write(
 		auto dir = info.dir();
 		if (!dir.mkpath(".")) {
 			if (state.printErrors) {
-				qmlWarning(view) << "Write of " << state.path
+				if (view) qmlWarning(view) << "Write of " << state.path
 				                 << " failed: Could not create parent directories of file.";
 			}
 
@@ -239,7 +282,7 @@ void FileViewWriter::write(
 		}
 	} else if (!info.isWritable()) {
 		if (state.printErrors) {
-			qmlWarning(view) << "Write of " << state.path << " failed: Permission denied.";
+			if (view) qmlWarning(view) << "Write of " << state.path << " failed: Permission denied.";
 		}
 
 		state.error = FileViewError::PermissionDenied;
@@ -256,7 +299,8 @@ void FileViewWriter::write(
 	}
 
 	if (!file->open(QFile::WriteOnly)) {
-		qmlWarning(view) << "Write of " << state.path << " failed: Unknown error when opening file.";
+		if (view) qmlWarning(view) << "Write of " << state.path
+		                           << " failed: Unknown error when opening file.";
 		state.error = FileViewError::Unknown;
 		return;
 	}
@@ -272,7 +316,7 @@ void FileViewWriter::write(
 		auto r = file->write(data.data() + i, data.length() - i); // NOLINT
 
 		if (r == -1) {
-			qmlWarning(view) << "Write of " << state.path << " failed: write() failed.";
+			if (view) qmlWarning(view) << "Write of " << state.path << " failed: write() failed.";
 
 			state.error = FileViewError::Unknown;
 			return;
@@ -286,7 +330,9 @@ void FileViewWriter::write(
 
 	if (doAtomicWrite) {
 		if (!reinterpret_cast<QSaveFile*>(file.get())->commit()) {
-			qmlWarning(view) << "Write of " << state.path << " failed: Atomic commit failed.";
+			if (view) qmlWarning(view) << "Write of " << state.path
+			                           << " failed: Atomic commit failed.";
+			state.error = FileViewError::Unknown;
 		}
 	}
 }
@@ -295,11 +341,84 @@ FileView::~FileView() {
 	if (this->mAdapter) {
 		this->mAdapter->setFileView(nullptr);
 	}
+
+	// A queued operation has never started: dispose it here.
+	if (this->pendingOperation) {
+		this->pendingOperation->disposePending();
+		this->pendingOperation = nullptr;
+	}
+
+	// A live operation keeps running on a worker thread. Disown it the same
+	// way a cancelled read is disowned: try to cancel, drop the completion
+	// connection, and let the worker finish on its own. The worker never
+	// touches this object again - read()/write() receive a null view (the
+	// QPointer owner is cleared by ~QObject) and return immediately, and no
+	// QML/Qt logging runs in that case - so waiting here would only block
+	// the GUI thread on a slow or blocked write for no benefit.
+	if (this->liveOperation) {
+		this->liveOperation->tryCancel();
+		QObject::disconnect(this->liveOperation, nullptr, this, nullptr);
+		this->liveOperation = nullptr;
+	}
 }
 
 void FileView::loadAsync(bool doStringConversion) {
 	// Writes update via operationFinished, making a read both invalid and outdated.
+	// If a write is in flight (or queued), a read must wait for it: queue the
+	// read instead of cancelling the write, which would block the GUI thread.
+	if (this->liveWriter() || this->pendingWriter()) {
+		if (auto* reader = this->pendingReader()) {
+			// Latest read wins: a queued read is replaced with the new path.
+			reader->state.path = this->targetPath;
+			reader->doStringConversion = doStringConversion;
+			reader->state.printErrors = this->bPrintErrors;
+			this->pathInFlight = this->targetPath;
+			return;
+		}
+
+		// A queued write is being replaced by a read. Its value is discarded
+		// (the target file is being read instead of written); no completion
+		// signal is emitted for a write that never runs - the read that
+		// supersedes it carries the outcome. writeData is cleared so a later
+		// identical write is not deduplicated against the discarded value.
+		if (auto* writer = this->pendingWriter()) {
+			writer->disposePending();
+			this->pendingOperation = nullptr;
+			this->writeData = FileViewData();
+		}
+
+		// A completion signal handler may have queued a new operation (not
+		// possible here - no emit above - but kept for symmetry with
+		// saveAsync); never overwrite it without disposing it first.
+		if (this->pendingOperation) {
+			this->pendingOperation->disposePending();
+			this->pendingOperation = nullptr;
+		}
+
+		auto* queuedReader = new FileViewReader(this, doStringConversion);
+		queuedReader->state.path = this->targetPath;
+		queuedReader->state.printErrors = this->bPrintErrors;
+		QObject::connect(
+		    queuedReader,
+		    &FileViewOperation::done,
+		    this,
+		    &FileView::operationFinished
+		);
+		this->pendingOperation = queuedReader;
+		this->pathInFlight = this->targetPath;
+		return;
+	}
+
 	if (!this->liveOperation || this->pathInFlight != this->targetPath) {
+		// A queued operation that is not for the current target was made
+		// stale by a reentrant path change; drop it before starting a fresh
+		// live read (a reentrant completion handler may have queued it).
+		if (this->pendingOperation
+		    && this->pendingOperation->state.path != this->targetPath) {
+			this->pendingOperation->disposePending();
+			this->pendingOperation = nullptr;
+		}
+
 		this->cancelAsync();
 		this->pathInFlight = this->targetPath;
 
@@ -323,8 +442,50 @@ void FileView::saveAsync() {
 		qmlWarning(this) << "Cannot write file, as no path has been specified.";
 		this->writeData = FileViewData();
 	} else {
-		// cancel will blank the data if waiting
+		// writeData stays populated until the operation completes so that
+		// writeCmpData() keeps deduplicating identical writes (A07.2).
 		auto data = this->writeData;
+
+		// A write is already in flight: queue this write behind it. The
+		// queued write replaces a previously queued one (latest-wins), so a
+		// burst of writes lands only the last value.
+		if (this->liveWriter() || this->pendingWriter()) {
+			if (auto* writer = this->pendingWriter()) {
+				// The queued write is superseded by a newer one: its value is
+				// discarded (the new write carries the latest data). No
+				// completion signal is emitted for a write that never runs;
+				// the superseding write's completion carries the outcome.
+				writer->disposePending();
+				this->pendingOperation = nullptr;
+			} else if (auto* reader = this->pendingReader()) {
+				// A queued read is superseded by a new write: the read's data
+				// would be outdated once the write lands, so it is dropped.
+				reader->disposePending();
+				this->pendingOperation = nullptr;
+			}
+
+			// A completion signal handler may have queued a new operation
+			// during a dispose above (none emits here, but keep the guard);
+			// never overwrite it without disposing it first.
+			if (this->pendingOperation) {
+				this->pendingOperation->disposePending();
+				this->pendingOperation = nullptr;
+			}
+
+			auto* writer = new FileViewWriter(this, this->bAtomicWrites);
+			writer->state.path = this->targetPath;
+			writer->state.data = std::move(data);
+			writer->state.printErrors = this->bPrintErrors;
+			QObject::connect(writer, &FileViewOperation::done, this, &FileView::operationFinished);
+			this->pendingOperation = writer;
+			return;
+		}
+
+		// A queued read has not started yet: a new write supersedes it.
+		if (auto* reader = this->pendingReader()) {
+			reader->disposePending();
+			this->pendingOperation = nullptr;
+		}
 
 		this->cancelAsync();
 
@@ -340,60 +501,121 @@ void FileView::saveAsync() {
 }
 
 void FileView::cancelAsync() {
-	if (!this->liveOperation) return;
-	this->liveOperation->tryCancel();
-
-	if (this->liveReader()) {
+	// Cancel only a live read: reads are disowned and their completion is
+	// ignored. A live write is never cancelled synchronously - that would
+	// block the GUI thread until the write finishes. New operations queue
+	// behind it instead.
+	if (auto* reader = this->liveReader()) {
 		qCDebug(logFileView) << "Disowning async read for" << this;
-		QObject::disconnect(this->liveOperation, nullptr, this, nullptr);
+		reader->tryCancel();
+		QObject::disconnect(reader, nullptr, this, nullptr);
 		this->liveOperation = nullptr;
-	} else if (this->liveWriter()) {
-		// We don't want to start a read or write operation in the middle of a write.
-		// This really shouldn't block but it isn't worth fixing for now.
-		qCDebug(logFileView) << "Blocking on write for" << this;
-		this->waitForJob();
+	}
+}
+
+void FileView::startPendingOperation() {
+	if (!this->pendingOperation) return;
+
+	auto* next = this->pendingOperation;
+	this->pendingOperation = nullptr;
+
+	// A queued operation whose path no longer matches the target was made
+	// stale by a reentrant path change; running it would roll the visible
+	// state back to an old path. Drop it instead.
+	if (next->state.path != this->targetPath) {
+		next->disposePending();
+		return;
+	}
+
+	qCDebug(logFileView) << "Starting queued operation for" << this << "of" << next->state.path;
+	QThreadPool::globalInstance()->start(next); // takes ownership
+	this->liveOperation = next;
+
+	if (auto* reader = this->liveReader()) {
+		this->pathInFlight = reader->state.path;
 	}
 }
 
 void FileView::operationFinished() {
-	if (this->sender() != this->liveOperation) {
+	auto* finished = this->liveOperation;
+	if (this->sender() != finished) {
 		qCWarning(logFileView) << "got operation finished from dropped operation" << this->sender();
 		return;
 	}
 
+	this->liveOperation = nullptr;
+
 	qCDebug(logFileView) << "Async operation finished for" << this;
 	this->writeData = FileViewData();
-	this->updateState(this->liveOperation->state);
 
-	if (this->liveReader()) {
-		if (this->state.error) emit this->loadFailed(this->state.error);
+	// A finished write's state carries the path it was started for. If the
+	// target path changed while the write was in flight (setPath queued a
+	// read for the new path, or set an empty path to unload), applying the
+	// writer's old-path state would roll the visible path/data back to the
+	// stale location - the unload is the latest intent. The error outcome is
+	// still preserved in both cases: the completion signal must reflect the
+	// actual result.
+	// An empty target is an unload - the newest intent - so a finished
+	// write's old-path state must never be applied. Only a matching non-empty
+	// target applies the write's state.
+	if (finished->state.path == this->targetPath && !this->targetPath.isEmpty()) {
+		this->updateState(finished->state);
+	} else if (finished->state.error != FileViewError::Success) {
+		this->state.error = finished->state.error;
+	}
+
+	if (dynamic_cast<FileViewReader*>(finished)) {
+		if (finished->state.error) emit this->loadFailed(finished->state.error);
 		else emit this->loaded();
 	} else {
-		if (this->state.error) emit this->saveFailed(this->state.error);
+		if (finished->state.error) emit this->saveFailed(finished->state.error);
 		else emit this->saved();
 	}
 
-	this->liveOperation = nullptr;
+	// A completion-signal handler may have started a new operation
+	// (reentrancy); do not let a queued operation clobber it.
+	if (this->liveOperation == nullptr) {
+		this->startPendingOperation();
+	}
 }
 
 void FileView::reload() { this->updatePath(); }
 
 bool FileView::waitForJob() {
+	// Wait for any live operation to finish. This is the documented blocking
+	// API (used by boot-time QML): it blocks the calling thread until the
+	// current operation completes, then applies its result.
 	if (this->liveOperation != nullptr) {
 		QObject::disconnect(this->liveOperation, nullptr, this, nullptr);
-		this->liveOperation->block();
-		this->writeData = FileViewData();
-		this->updateState(this->liveOperation->state);
+		auto* op = this->liveOperation;
+		this->liveOperation = nullptr;
 
-		if (this->liveReader()) {
-			if (this->state.error) emit this->loadFailed(this->state.error);
+		op->block();
+		this->writeData = FileViewData();
+
+		// Same stale-path guard as operationFinished: if the target path
+		// changed while the operation ran (or was unloaded), do not roll the
+		// visible state back to the old path; the queued read brings the new
+		// path's data. The error outcome is preserved in both cases.
+		if (op->state.path == this->targetPath && !this->targetPath.isEmpty()) {
+			this->updateState(op->state);
+		} else if (op->state.error != FileViewError::Success) {
+			this->state.error = op->state.error;
+		}
+
+		if (dynamic_cast<FileViewReader*>(op)) {
+			if (op->state.error) emit this->loadFailed(op->state.error);
 			else emit this->loaded();
 		} else {
-			if (this->state.error) emit this->saveFailed(this->state.error);
+			if (op->state.error) emit this->saveFailed(op->state.error);
 			else emit this->saved();
 		}
 
-		this->liveOperation = nullptr;
+		// The completed operation is deleted by its own finished() slot; the
+		// disconnect above prevents it from calling operationFinished().
+		if (this->liveOperation == nullptr) {
+			this->startPendingOperation();
+		}
 		return true;
 	} else return false;
 }
@@ -405,7 +627,7 @@ void FileView::loadSync() {
 	} else if (!this->waitForJob()) {
 		auto state = FileViewState(this->targetPath);
 		state.printErrors = this->bPrintErrors;
-		FileViewReader::read(this, state, false);
+		FileViewReader::read(QPointer<FileView>(this), state, false);
 		this->updateState(state);
 
 		if (this->state.error) emit this->loadFailed(this->state.error);
@@ -418,13 +640,24 @@ void FileView::saveSync() {
 		qmlWarning(this) << "Cannot write file, as no path has been specified.";
 		this->writeData = FileViewData();
 	} else {
-		// Both reads and writes will be outdated.
-		if (this->liveOperation) this->cancelAsync();
+		// Both reads and writes will be outdated. Capture the data before
+		// waiting: waitForJob() clears writeData when a live operation
+		// completes.
+		auto data = this->writeData;
+
+		// A queued operation must not start concurrently with the synchronous
+		// write below: dispose it (its data is superseded by this write).
+		if (this->pendingOperation) {
+			this->pendingOperation->disposePending();
+			this->pendingOperation = nullptr;
+		}
+
+		if (this->liveOperation) this->waitForJob();
 
 		auto state = FileViewState(this->targetPath);
-		state.data = this->writeData;
+		state.data = data;
 		state.printErrors = this->bPrintErrors;
-		FileViewWriter::write(this, state, this->bAtomicWrites);
+		FileViewWriter::write(QPointer<FileView>(this), state, this->bAtomicWrites);
 		this->writeData = FileViewData();
 		this->updateState(state);
 
@@ -467,12 +700,59 @@ void FileView::setPath(const QString& path) {
 	if (p == this->targetPath) return;
 
 	if (this->liveWriter()) {
-		this->waitForJob();
+		// A write is in flight: do not block the GUI thread. The pending
+		// queue holds the new path; the queued read will run after the write.
+		if (auto* writer = this->pendingWriter()) {
+			// A queued write is cancelled by the path change: its data is
+			// discarded (the target it was meant for is gone). No completion
+			// signal is emitted - the write never started and its value never
+			// reaches any file.
+			writer->disposePending();
+			this->pendingOperation = nullptr;
+			this->writeData = FileViewData();
+		}
+
+		// An empty path unloads the file: updatePath clears the state below,
+		// so no queued read is needed (a read of "" would spuriously fail).
+		if (!p.isEmpty()) {
+			if (auto* reader = this->pendingReader()) {
+				// A queued read is reused for the new path (latest read wins).
+				reader->state.path = p;
+				reader->state.printErrors = this->bPrintErrors;
+				this->pathInFlight = p;
+			} else {
+				auto* queuedReader = new FileViewReader(this, false);
+				queuedReader->state.path = p;
+				queuedReader->state.printErrors = this->bPrintErrors;
+				QObject::connect(
+				    queuedReader,
+				    &FileViewOperation::done,
+				    this,
+				    &FileView::operationFinished
+				);
+				this->pendingOperation = queuedReader;
+				this->pathInFlight = p;
+			}
+		}
 	} else {
 		this->cancelAsync();
 	}
 
 	this->targetPath = p;
+
+	// The path property must reflect the new target immediately, even when a
+	// write is still in flight (path() reads state.path). Update only the
+	// path - the queued read/write will bring the data once it runs. The
+	// previously loaded data and loaded() state stay as they are until the
+	// queued operation completes, matching the documented contract: "If a
+	// file was loaded, and path was changed to a new file, no blocking will
+	// occur" and "text()/data() return the old data until the load
+	// completes".
+	if (this->state.path != p) {
+		this->state.path = p;
+		emit this->pathChanged();
+	}
+
 	this->updatePath();
 }
 
@@ -554,6 +834,14 @@ FileViewReader* FileView::liveReader() const {
 
 FileViewWriter* FileView::liveWriter() const {
 	return dynamic_cast<FileViewWriter*>(this->liveOperation);
+}
+
+FileViewReader* FileView::pendingReader() const {
+	return dynamic_cast<FileViewReader*>(this->pendingOperation);
+}
+
+FileViewWriter* FileView::pendingWriter() const {
+	return dynamic_cast<FileViewWriter*>(this->pendingOperation);
 }
 
 const FileViewData& FileView::writeCmpData() const {

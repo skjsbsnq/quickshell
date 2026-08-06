@@ -89,6 +89,11 @@ public:
 	// If possible, block() returns sooner.
 	void tryCancel();
 
+	// Dispose of an operation that was queued but never started. The
+	// operation is still holding its block mutex (it never ran), so it must
+	// be released before deletion.
+	void disposePending();
+
 	FileViewState state;
 
 signals:
@@ -114,7 +119,7 @@ public:
 	void run() override;
 
 	static void read(
-	    FileView* view,
+	    const QPointer<FileView>& view,
 	    FileViewState& state,
 	    bool doStringConversion,
 	    const QAtomicInteger<bool>& shouldCancel = false
@@ -132,7 +137,7 @@ public:
 	void run() override;
 
 	static void write(
-	    FileView* view,
+	    const QPointer<FileView>& view,
 	    FileViewState& state,
 	    bool doAtomicWrite,
 	    const QAtomicInteger<bool>& shouldCancel = false
@@ -312,13 +317,19 @@ public:
 	///
 	/// @@atomicWrites and @@blockWrites affect the behavior of this function.
 	///
-	/// @@saved(s) or @@saveFailed(s) will be emitted on completion.
+	/// @@saved(s) or @@saveFailed(s) will be emitted on completion. With
+	/// rapid successive writes, a queued write superseded by a newer one is
+	/// not executed and emits no completion signal - only writes that
+	/// actually run emit.
 	Q_INVOKABLE void setData(const QByteArray& data);
 	/// Sets the content of the file specified by @@path as text.
 	///
 	/// @@atomicWrites and @@blockWrites affect the behavior of this function.
 	///
-	/// @@saved(s) or @@saveFailed(s) will be emitted on completion.
+	/// @@saved(s) or @@saveFailed(s) will be emitted on completion. With
+	/// rapid successive writes, a queued write superseded by a newer one is
+	/// not executed and emits no completion signal - only writes that
+	/// actually run emit.
 	///
 	/// [ArrayBuffer]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ArrayBuffer
 	Q_INVOKABLE void setText(const QString& text);
@@ -372,6 +383,7 @@ private:
 	void cancelAsync();
 	void loadSync();
 	void saveSync();
+	void startPendingOperation();
 	void updateState(FileViewState& newState);
 	void updatePath();
 	void updateWatchedFiles();
@@ -381,11 +393,17 @@ private:
 	[[nodiscard]] bool shouldBlockRead() const;
 	[[nodiscard]] FileViewReader* liveReader() const;
 	[[nodiscard]] FileViewWriter* liveWriter() const;
+	[[nodiscard]] FileViewReader* pendingReader() const;
+	[[nodiscard]] FileViewWriter* pendingWriter() const;
 	[[nodiscard]] const FileViewData& writeCmpData() const;
 
 	FileViewState state;
 	FileViewData writeData;
 	FileViewOperation* liveOperation = nullptr;
+	// A single-slot queue for operations that must wait for the live
+	// operation (a write in flight) to finish. A queued operation has not
+	// been started yet and can be replaced or disposed safely.
+	FileViewOperation* pendingOperation = nullptr;
 	QString pathInFlight;
 
 	QString targetPath;
