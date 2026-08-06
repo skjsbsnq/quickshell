@@ -15,13 +15,20 @@ namespace qs::wayland::tahoe_glass::impl {
 TahoeGlassManager::TahoeGlassManager(): QWaylandClientExtensionTemplate(4) { this->initialize(); }
 
 TahoeGlassSurface* TahoeGlassManager::createGlassSurface(QtWaylandClient::QWaylandWindow* window) {
-	if (!this->isActive()) return nullptr;
+	if (!this->isActive() || !window) return nullptr;
 	return new TahoeGlassSurface(this->get_tahoe_glass_surface(window->surface()));
 }
 
 TahoeGlassManager* TahoeGlassManager::instance() {
 	static auto* instance = new TahoeGlassManager(); // NOLINT
-	return instance->isInitialized() ? instance : nullptr;
+	// The generated isInitialized() flag only records that the global was
+	// bound at least once; it says nothing about whether the binding is still
+	// live. isActive() is the live-binding test: a compositor that never bound
+	// the global (or a compositor restart that removed it) leaves the manager
+	// inactive, and callers treat a null instance as "protocol unavailable"
+	// so they stay on the fallback path (A08.4). createGlassSurface keeps its
+	// own isActive() guard for direct callers.
+	return instance->isActive() ? instance : nullptr;
 }
 
 } // namespace qs::wayland::tahoe_glass::impl

@@ -633,6 +633,13 @@ bool TahoeGlass::queueRegionMorphEased(
 
 bool TahoeGlass::fallbackEnabled() const { return this->mFallbackEnabled; }
 
+quint64 TahoeGlass::mappingGeneration() const { return this->mMappingGeneration; }
+
+void TahoeGlass::advanceMappingGeneration() {
+	++this->mMappingGeneration;
+	emit this->mappingGenerationChanged();
+}
+
 void TahoeGlass::setFallbackEnabled(bool enabled) {
 	if (enabled == this->mFallbackEnabled) return;
 	this->mFallbackEnabled = enabled;
@@ -735,6 +742,18 @@ void TahoeGlass::waylandSurfaceCreated() {
 	if (prev && !prev->proxyWindow && (this->surface || !prev->fallbackEffect)) {
 		prev->deleteLater();
 	}
+
+	// No protocol surface (e.g. the compositor never bound the manager): the
+	// generation stays put and the fallback (non-compositor) path stays active
+	// — there is nothing new to replay a compositor slide on. Advancing only
+	// when a real protocol surface exists is what lets shells gate their
+	// mapping replay on `available` (A08.4).
+	if (!this->surface) return;
+
+	// The new wl_surface is a new mapping generation. Notify after
+	// setAvailable so handlers (e.g. the Dock's compositor-slide replay)
+	// observe the new protocol surface as available at notify time.
+	this->advanceMappingGeneration();
 }
 
 void TahoeGlass::waylandSurfaceDestroyed() {

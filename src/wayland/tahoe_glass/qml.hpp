@@ -7,6 +7,7 @@
 class TestTransformLifecycle;
 class TestFallbackAlpha;
 class TestCommitAtomicity;
+class TestMappingLifecycle;
 #endif
 
 #include <private/qquickitemchangelistener_p.h>
@@ -212,6 +213,12 @@ class TahoeGlass: public AttachedSurfaceLifecycle {
 	    bool fallbackEnabled READ fallbackEnabled WRITE setFallbackEnabled NOTIFY
 	        fallbackEnabledChanged
 	);
+	/// Monotonically increasing per-wl_surface mapping generation: advances
+	/// exactly once per waylandSurfaceCreated (initial map, unmap/remap, and
+	/// surface rebuild all go through that hook), never on ordinary commits.
+	/// Read with `available` for a consistent snapshot; the value is 0 until
+	/// the first protocol surface exists and has no mapping semantics.
+	Q_PROPERTY(quint64 mappingGeneration READ mappingGeneration NOTIFY mappingGenerationChanged);
 	QML_ELEMENT;
 	QML_UNCREATABLE("TahoeGlass can only be used as an attached object.");
 	QML_ATTACHED(TahoeGlass);
@@ -224,6 +231,13 @@ public:
 	[[nodiscard]] bool transformAvailable() const;
 	[[nodiscard]] bool fallbackEnabled() const;
 	void setFallbackEnabled(bool enabled);
+
+	[[nodiscard]] quint64 mappingGeneration() const;
+	/// Advance the per-wl_surface mapping generation. Called exactly once per
+	/// waylandSurfaceCreated (initial map, unmap/remap, and surface rebuild).
+	/// The signal must fire only here, after `setAvailable`, so handlers
+	/// observe the new protocol surface as available (see waylandSurfaceCreated).
+	void advanceMappingGeneration();
 
 	/// Presentation-transform requests (protocol v4). All return false and do
 	/// nothing when transformAvailable is false, so callers can fall back to
@@ -279,6 +293,7 @@ signals:
 	void availableChanged();
 	void transformAvailableChanged();
 	void fallbackEnabledChanged();
+	void mappingGenerationChanged();
 
 private slots:
 	void onRegionDestroyed();
@@ -332,6 +347,13 @@ private:
 	void commitGlassIfIdleForTest() { this->commitGlassIfIdle(); }
 	void emitFrameSwappedForTest() { this->onFrameSwapped(); }
 	[[nodiscard]] int explicitCommitCountForTest() const { return this->mExplicitCommitCount; }
+
+	// Task 08: test-only observation of the mapping generation state machine.
+	// Production builds omit these.
+	friend class ::TestMappingLifecycle;
+	void updateRegionsForTest() { this->updateRegions(); }
+	[[nodiscard]] quint64 mappingGenerationForTest() const { return this->mMappingGeneration; }
+	void advanceMappingGenerationForTest() { this->advanceMappingGeneration(); }
 #endif
 
 	void backingWindowConnected() override;
@@ -353,6 +375,7 @@ private:
 	bool mAvailable = false;
 	bool mTransformAvailable = false;
 	bool mFallbackEnabled = true;
+	quint64 mMappingGeneration = 0;
 	QList<TahoeGlassRegion*> mRegions;
 	std::unique_ptr<impl::TahoeGlassSurface> surface;
 	background_effect::BackgroundEffect* fallbackEffect = nullptr;

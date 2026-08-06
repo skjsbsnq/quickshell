@@ -3,10 +3,11 @@
 
 #include "commit_atomicity.hpp"
 #include "fallback_alpha.hpp"
+#include "mapping_lifecycle.hpp"
 #include "region_diff.hpp"
 #include "transform_lifecycle.hpp"
 
-// Single shared executable for Task 06/13/17/20 Tahoe glass behavioral tests.
+// Single shared executable for Task 06/13/17/20/08 Tahoe glass behavioral tests.
 int main(int argc, char** argv) {
 	QGuiApplication app(argc, argv);
 	int status = 0;
@@ -24,6 +25,10 @@ int main(int argc, char** argv) {
 	}
 	{
 		TestCommitAtomicity tc;
+		status |= QTest::qExec(&tc, argc, argv);
+	}
+	{
+		TestMappingLifecycle tc;
 		status |= QTest::qExec(&tc, argc, argv);
 	}
 	return status;
