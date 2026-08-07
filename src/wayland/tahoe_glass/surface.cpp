@@ -1,4 +1,5 @@
 #include "surface.hpp"
+#include <utility>
 
 #include <qdebug.h>
 #include <qglobal.h>
@@ -192,8 +193,35 @@ bool TahoeGlassSurface::supportsTransform() const {
 	           >= TAHOE_GLASS_SURFACE_V1_SET_TRANSFORM_SINCE_VERSION;
 }
 
-bool TahoeGlassSurface::ensureTransformSupported(const char* request) const {
-	if (this->supportsTransform()) return true;
+bool TahoeGlassSurface::supportsFeedback() const {
+	return this->isInitialized()
+	    && this->QtWayland::tahoe_glass_surface_v1::version()
+	           >= TAHOE_GLASS_SURFACE_V1_SET_TRANSFORM_SERIAL_SINCE_VERSION;
+}
+
+bool TahoeGlassSurface::hasTransformFeedbackCapability(quint32 capabilities) {
+	return (capabilities & capability_transform_feedback) != 0;
+}
+
+void TahoeGlassSurface::setEventHandlers(
+    CapabilitiesHandler capabilities,
+    FeedbackHandler feedback
+) {
+	this->mCapabilitiesHandler = std::move(capabilities);
+	this->mFeedbackHandler = std::move(feedback);
+}
+
+void TahoeGlassSurface::tahoe_glass_surface_v1_capabilities(quint32 capabilities) {
+	this->mCapabilities = capabilities;
+	if (this->mCapabilitiesHandler) this->mCapabilitiesHandler(capabilities);
+}
+
+void TahoeGlassSurface::tahoe_glass_surface_v1_transform_feedback(quint32 serial, quint32 status) {
+	if (this->mFeedbackHandler) this->mFeedbackHandler(serial, status);
+}
+
+bool TahoeGlassSurface::ensureTransformSupported(const char* request, quint32 serial) const {
+	if (this->supportsTransform() && (serial == 0 || this->supportsFeedback())) return true;
 
 	static bool warned = false;
 	if (!warned) {
@@ -205,9 +233,10 @@ bool TahoeGlassSurface::ensureTransformSupported(const char* request) const {
 	return false;
 }
 
-bool TahoeGlassSurface::setTransform(qreal x, qreal y, qreal scaleX, qreal scaleY) {
-	if (!this->ensureTransformSupported("set_transform")) return false;
+bool TahoeGlassSurface::setTransform(quint32 serial, qreal x, qreal y, qreal scaleX, qreal scaleY) {
+	if (!this->ensureTransformSupported("set_transform", serial)) return false;
 
+	if (serial != 0) this->set_transform_serial(serial);
 	this->set_transform(
 	    wl_fixed_from_double(x),
 	    wl_fixed_from_double(y),
@@ -218,6 +247,7 @@ bool TahoeGlassSurface::setTransform(qreal x, qreal y, qreal scaleX, qreal scale
 }
 
 bool TahoeGlassSurface::setTransformTargetSpring(
+    quint32 serial,
     qreal x,
     qreal y,
     qreal scaleX,
@@ -226,8 +256,9 @@ bool TahoeGlassSurface::setTransformTargetSpring(
     qreal stiffness,
     qreal epsilon
 ) {
-	if (!this->ensureTransformSupported("set_transform_target")) return false;
+	if (!this->ensureTransformSupported("set_transform_target", serial)) return false;
 
+	if (serial != 0) this->set_transform_serial(serial);
 	this->set_transform_target(
 	    wl_fixed_from_double(x),
 	    wl_fixed_from_double(y),
@@ -244,6 +275,7 @@ bool TahoeGlassSurface::setTransformTargetSpring(
 }
 
 bool TahoeGlassSurface::setTransformTargetEased(
+    quint32 serial,
     qreal x,
     qreal y,
     qreal scaleX,
@@ -254,8 +286,9 @@ bool TahoeGlassSurface::setTransformTargetEased(
     qreal x2,
     qreal y2
 ) {
-	if (!this->ensureTransformSupported("set_transform_target")) return false;
+	if (!this->ensureTransformSupported("set_transform_target", serial)) return false;
 
+	if (serial != 0) this->set_transform_serial(serial);
 	this->set_transform_target(
 	    wl_fixed_from_double(x),
 	    wl_fixed_from_double(y),
@@ -272,13 +305,15 @@ bool TahoeGlassSurface::setTransformTargetEased(
 }
 
 bool TahoeGlassSurface::setRegionMorphSpring(
+    quint32 serial,
     quint32 regionId,
     qreal dampingRatio,
     qreal stiffness,
     qreal epsilon
 ) {
-	if (!this->ensureTransformSupported("set_region_morph")) return false;
+	if (!this->ensureTransformSupported("set_region_morph", serial)) return false;
 
+	if (serial != 0) this->set_transform_serial(serial);
 	this->set_region_morph(
 	    regionId,
 	    transform_curve_spring,
@@ -292,6 +327,7 @@ bool TahoeGlassSurface::setRegionMorphSpring(
 }
 
 bool TahoeGlassSurface::setRegionMorphEased(
+    quint32 serial,
     quint32 regionId,
     qreal durationMs,
     qreal x1,
@@ -299,8 +335,9 @@ bool TahoeGlassSurface::setRegionMorphEased(
     qreal x2,
     qreal y2
 ) {
-	if (!this->ensureTransformSupported("set_region_morph")) return false;
+	if (!this->ensureTransformSupported("set_region_morph", serial)) return false;
 
+	if (serial != 0) this->set_transform_serial(serial);
 	this->set_region_morph(
 	    regionId,
 	    transform_curve_eased,

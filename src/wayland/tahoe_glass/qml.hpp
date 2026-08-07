@@ -8,15 +8,18 @@ class TestTransformLifecycle;
 class TestFallbackAlpha;
 class TestCommitAtomicity;
 class TestMappingLifecycle;
+class TestFeedbackLifecycle;
 #endif
 
 #include <private/qquickitemchangelistener_p.h>
 #include <private/qwaylandwindow_p.h>
 #include <qcoreevent.h>
 #include <qobject.h>
+#include <qpointer.h>
 #include <qqmlintegration.h>
 #include <qqmllist.h>
 #include <qquickitem.h>
+#include <qset.h>
 #include <qtmetamacros.h>
 #include <qtypes.h>
 #include <qwindow.h>
@@ -209,6 +212,11 @@ class TahoeGlass: public AttachedSurfaceLifecycle {
 	Q_PROPERTY(
 	    bool transformAvailable READ transformAvailable NOTIFY transformAvailableChanged
 	);
+	Q_PROPERTY(bool feedbackAvailable READ feedbackAvailable NOTIFY feedbackAvailableChanged);
+	Q_PROPERTY(bool transformInFlight READ transformInFlight NOTIFY transformInFlightChanged);
+	Q_PROPERTY(
+	    quint32 activeTransformSerial READ activeTransformSerial NOTIFY activeTransformSerialChanged
+	);
 	Q_PROPERTY(
 	    bool fallbackEnabled READ fallbackEnabled WRITE setFallbackEnabled NOTIFY
 	        fallbackEnabledChanged
@@ -224,11 +232,22 @@ class TahoeGlass: public AttachedSurfaceLifecycle {
 	QML_ATTACHED(TahoeGlass);
 
 public:
+	enum TransformFeedbackStatus : quint32 {
+		Completed = 0,
+		Rejected = 1,
+		Superseded = 2,
+		Cancelled = 3,
+	};
+	Q_ENUM(TransformFeedbackStatus);
+
 	explicit TahoeGlass(ProxyWindowBase* window);
 
 	QQmlListProperty<TahoeGlassRegion> regions();
 	[[nodiscard]] bool available() const;
 	[[nodiscard]] bool transformAvailable() const;
+	[[nodiscard]] bool feedbackAvailable() const;
+	[[nodiscard]] bool transformInFlight() const;
+	[[nodiscard]] quint32 activeTransformSerial() const;
 	[[nodiscard]] bool fallbackEnabled() const;
 	void setFallbackEnabled(bool enabled);
 
@@ -292,6 +311,10 @@ signals:
 	void regionsChanged();
 	void availableChanged();
 	void transformAvailableChanged();
+	void feedbackAvailableChanged();
+	void transformInFlightChanged();
+	void activeTransformSerialChanged();
+	void transformFinished(quint32 serial, quint32 status);
 	void fallbackEnabledChanged();
 	void mappingGenerationChanged();
 
@@ -354,6 +377,33 @@ private:
 	void updateRegionsForTest() { this->updateRegions(); }
 	[[nodiscard]] quint64 mappingGenerationForTest() const { return this->mMappingGeneration; }
 	void advanceMappingGenerationForTest() { this->advanceMappingGeneration(); }
+
+	// Task 09: feedback lifecycle state machine without a live Wayland server.
+	friend class ::TestFeedbackLifecycle;
+	quint32 beginFeedbackForTest() {
+		const auto serial = this->allocateFeedbackSerial();
+		this->publishServerFeedbackRequest(serial);
+		return serial;
+	}
+	quint32 queuePendingMorphForTest() {
+		const auto serial = this->allocateFeedbackSerial();
+		this->queueFeedbackMorph(PendingMorph {.serial = serial});
+		return serial;
+	}
+	void publishPendingMorphForTest() {
+		if (this->pendingMorph) this->markPendingMorphServerOwned(this->pendingMorph->serial);
+	}
+	void handleTransformFeedbackForTest(quint32 serial, quint32 status) {
+		this->handleTransformFeedback(serial, status);
+	}
+	void cancelActiveFeedbackForTest() { this->cancelOutstandingFeedback(); }
+	void handoffFeedbackStateForTest(TahoeGlass& previous) {
+		this->handoffFeedbackStateFrom(previous);
+	}
+	[[nodiscard]] bool hasPendingMorphForTest() const { return this->pendingMorph.has_value(); }
+	[[nodiscard]] qsizetype serverOwnedCountForTest() const {
+		return this->mServerOwnedTransformSerials.size();
+	}
 #endif
 
 	void backingWindowConnected() override;
@@ -374,14 +424,22 @@ private:
 	bool mRepaintInFlight = false;
 	bool mAvailable = false;
 	bool mTransformAvailable = false;
+	bool mFeedbackAvailable = false;
+	bool mFeedbackAdvertised = false;
+	bool mTransformInFlight = false;
+	bool mAcceptingProtocolRequests = true;
 	bool mFallbackEnabled = true;
 	quint64 mMappingGeneration = 0;
+	quint32 mNextTransformSerial = 1;
+	quint32 mActiveTransformSerial = 0;
+	QSet<quint32> mServerOwnedTransformSerials;
 	QList<TahoeGlassRegion*> mRegions;
 	std::unique_ptr<impl::TahoeGlassSurface> surface;
 	background_effect::BackgroundEffect* fallbackEffect = nullptr;
 	PendingRegion* fallbackRegion = nullptr;
 
 	struct PendingMorph {
+		quint32 serial = 0;
 		quint32 regionId = 0;
 		bool eased = false;
 		qreal p1 = 0.0;
@@ -391,6 +449,18 @@ private:
 		qreal p5 = 0.0;
 	};
 	std::optional<PendingMorph> pendingMorph;
+
+	void configureSurfaceFeedback(bool replayCapabilities = true);
+	void handleCapabilities(quint32 capabilities);
+	void handleTransformFeedback(quint32 serial, quint32 status);
+	quint32 allocateFeedbackSerial();
+	void publishServerFeedbackRequest(quint32 serial);
+	void queueFeedbackMorph(PendingMorph morph);
+	void markPendingMorphServerOwned(quint32 serial);
+	void finishPendingFeedback(quint32 serial, quint32 status);
+	void cancelOutstandingFeedback();
+	void setLatestFeedbackIntent(quint32 serial);
+	void handoffFeedbackStateFrom(TahoeGlass& previous);
 #ifdef QS_TEST
 	/// Test-only diagnostic: number of explicit (non-deferred) wl_surface
 	/// commits issued by commitGlassIfIdle. Production builds never read it

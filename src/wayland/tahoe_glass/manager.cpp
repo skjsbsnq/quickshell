@@ -8,11 +8,11 @@
 
 namespace qs::wayland::tahoe_glass::impl {
 
-// Bind up to v4: v4 adds the presentation-transform requests
-// (set_transform / set_transform_target / set_region_morph). Qt clamps to
-// min(server version, 4); TahoeGlassSurface::supportsTransform() gates the
-// v4 requests at runtime so an older niri keeps working with regions only.
-TahoeGlassManager::TahoeGlassManager(): QWaylandClientExtensionTemplate(4) { this->initialize(); }
+// Bind up to v5: v4 adds the presentation-transform requests and v5 adds
+// serial-correlated completion feedback. Qt clamps to min(server version, 5);
+// TahoeGlassSurface gates transform requests at runtime so an older niri keeps
+// working with regions only.
+TahoeGlassManager::TahoeGlassManager(): QWaylandClientExtensionTemplate(5) { this->initialize(); }
 
 TahoeGlassSurface* TahoeGlassManager::createGlassSurface(QtWaylandClient::QWaylandWindow* window) {
 	if (!this->isActive() || !window) return nullptr;

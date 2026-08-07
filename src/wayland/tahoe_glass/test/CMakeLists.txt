@@ -21,6 +21,6 @@ function (qs_test name)
 	set_tests_properties(${name} PROPERTIES LABELS tahoe-glass)
 endfunction()
 
-# Unique shared harness for Task 06/13/17/20/08 Tahoe glass behavioral tests.
+# Unique shared harness for Task 06/13/17/20/08/09 Tahoe glass behavioral tests.
 # Single executable; each task only adds named sources (no second harness).
-qs_test(tahoe-glass-tests main.cpp region_diff.cpp transform_lifecycle.cpp fallback_alpha.cpp commit_atomicity.cpp mapping_lifecycle.cpp)
+qs_test(tahoe-glass-tests main.cpp region_diff.cpp transform_lifecycle.cpp fallback_alpha.cpp commit_atomicity.cpp mapping_lifecycle.cpp feedback_lifecycle.cpp)

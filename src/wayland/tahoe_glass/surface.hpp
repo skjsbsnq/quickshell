@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include <qlist.h>
 #include <qrect.h>
 #include <qstring.h>
@@ -51,6 +53,9 @@ struct TahoeGlassRegionDiff {
 
 class TahoeGlassSurface: public QtWayland::tahoe_glass_surface_v1 {
 public:
+	using CapabilitiesHandler = std::function<void(quint32)>;
+	using FeedbackHandler = std::function<void(quint32, quint32)>;
+
 	explicit TahoeGlassSurface(::tahoe_glass_surface_v1* surface);
 	~TahoeGlassSurface() override;
 	Q_DISABLE_COPY_MOVE(TahoeGlassSurface);
@@ -60,12 +65,17 @@ public:
 	/// Whether the compositor bound this surface at protocol version 4+,
 	/// i.e. the presentation-transform requests below are usable.
 	[[nodiscard]] bool supportsTransform() const;
+	[[nodiscard]] bool supportsFeedback() const;
+	[[nodiscard]] static bool hasTransformFeedbackCapability(quint32 capabilities);
+	void setEventHandlers(CapabilitiesHandler capabilities, FeedbackHandler feedback);
+	[[nodiscard]] quint32 capabilities() const { return this->mCapabilities; }
 
 	/// v4 presentation-transform requests. All are double-buffered server
 	/// side (applied on the next wl_surface commit) and return false without
 	/// sending anything when the bound version is below 4.
-	bool setTransform(qreal x, qreal y, qreal scaleX, qreal scaleY);
+	bool setTransform(quint32 serial, qreal x, qreal y, qreal scaleX, qreal scaleY);
 	bool setTransformTargetSpring(
+	    quint32 serial,
 	    qreal x,
 	    qreal y,
 	    qreal scaleX,
@@ -75,6 +85,7 @@ public:
 	    qreal epsilon
 	);
 	bool setTransformTargetEased(
+	    quint32 serial,
 	    qreal x,
 	    qreal y,
 	    qreal scaleX,
@@ -85,14 +96,33 @@ public:
 	    qreal x2,
 	    qreal y2
 	);
-	bool
-	setRegionMorphSpring(quint32 regionId, qreal dampingRatio, qreal stiffness, qreal epsilon);
-	bool
-	setRegionMorphEased(quint32 regionId, qreal durationMs, qreal x1, qreal y1, qreal x2, qreal y2);
+	bool setRegionMorphSpring(
+	    quint32 serial,
+	    quint32 regionId,
+	    qreal dampingRatio,
+	    qreal stiffness,
+	    qreal epsilon
+	);
+	bool setRegionMorphEased(
+	    quint32 serial,
+	    quint32 regionId,
+	    qreal durationMs,
+	    qreal x1,
+	    qreal y1,
+	    qreal x2,
+	    qreal y2
+	);
 
 private:
-	bool ensureTransformSupported(const char* request) const;
+	bool ensureTransformSupported(const char* request, quint32 serial) const;
 
+protected:
+	void tahoe_glass_surface_v1_capabilities(quint32 capabilities) override;
+	void tahoe_glass_surface_v1_transform_feedback(quint32 serial, quint32 status) override;
+
+	CapabilitiesHandler mCapabilitiesHandler;
+	FeedbackHandler mFeedbackHandler;
+	quint32 mCapabilities = 0;
 	/// Canonical unique-id region state matching the last protocol content.
 	QList<TahoeGlassRegionState> mRegions;
 };

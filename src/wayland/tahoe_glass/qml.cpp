@@ -524,22 +524,35 @@ bool TahoeGlass::available() const { return this->mAvailable; }
 
 bool TahoeGlass::transformAvailable() const { return this->mTransformAvailable; }
 
+bool TahoeGlass::feedbackAvailable() const { return this->mFeedbackAvailable; }
+
+bool TahoeGlass::transformInFlight() const { return this->mTransformInFlight; }
+
+quint32 TahoeGlass::activeTransformSerial() const { return this->mActiveTransformSerial; }
+
 impl::TahoeGlassSurface* TahoeGlass::ensureSurface() {
+	if (!this->mAcceptingProtocolRequests) return nullptr;
 	if (this->surface) return this->surface.get();
 	if (!this->mWaylandWindow || !this->mWaylandWindow->surface()) return nullptr;
 
+	QPointer guard(this);
 	if (auto* manager = impl::TahoeGlassManager::instance()) {
 		this->surface =
 		    std::unique_ptr<impl::TahoeGlassSurface>(manager->createGlassSurface(this->mWaylandWindow)
 		    );
+		this->configureSurfaceFeedback();
 	}
 
+	if (!guard) return nullptr;
 	return this->surface.get();
 }
 
 bool TahoeGlass::sendTransform(qreal x, qreal y, qreal scaleX, qreal scaleY) {
-	auto* surface = this->ensureSurface();
-	if (!surface || !surface->setTransform(x, y, scaleX, scaleY)) return false;
+	QPointer guard(this);
+	auto* protocolSurface = this->ensureSurface();
+	if (!guard || !protocolSurface || protocolSurface != this->surface.get()) return false;
+	const auto serial = this->feedbackAvailable() ? this->allocateFeedbackSerial() : 0;
+	if (!protocolSurface->setTransform(serial, x, y, scaleX, scaleY)) return false;
 
 	// Transform requests are double-buffered wl_surface pending state. With
 	// no accompanying content change nothing else would commit, so commit
@@ -547,6 +560,7 @@ bool TahoeGlass::sendTransform(qreal x, qreal y, qreal scaleX, qreal scaleY) {
 	// graph's buffer commit so the transform lands in the same atomic
 	// wl_surface commit as the new content instead of the previous buffer.
 	this->commitGlassIfIdle();
+	if (serial != 0) this->publishServerFeedbackRequest(serial);
 	return true;
 }
 
@@ -559,14 +573,24 @@ bool TahoeGlass::sendTransformTargetSpring(
     qreal stiffness,
     qreal epsilon
 ) {
-	auto* surface = this->ensureSurface();
-	if (!surface
-	    || !surface->setTransformTargetSpring(x, y, scaleX, scaleY, dampingRatio, stiffness, epsilon))
-	{
+	QPointer guard(this);
+	auto* protocolSurface = this->ensureSurface();
+	if (!guard || !protocolSurface || protocolSurface != this->surface.get()) return false;
+	const auto serial = this->feedbackAvailable() ? this->allocateFeedbackSerial() : 0;
+	if (!protocolSurface->setTransformTargetSpring(
+	        serial,
+	        x,
+	        y,
+	        scaleX,
+	        scaleY,
+	        dampingRatio,
+	        stiffness,
+	        epsilon
+	    ))
 		return false;
-	}
 
 	this->commitGlassIfIdle();
+	if (serial != 0) this->publishServerFeedbackRequest(serial);
 	return true;
 }
 
@@ -581,14 +605,16 @@ bool TahoeGlass::sendTransformTargetEased(
     qreal x2,
     qreal y2
 ) {
-	auto* surface = this->ensureSurface();
-	if (!surface
-	    || !surface->setTransformTargetEased(x, y, scaleX, scaleY, durationMs, x1, y1, x2, y2))
-	{
+	QPointer guard(this);
+	auto* protocolSurface = this->ensureSurface();
+	if (!guard || !protocolSurface || protocolSurface != this->surface.get()) return false;
+	const auto serial = this->feedbackAvailable() ? this->allocateFeedbackSerial() : 0;
+	if (!protocolSurface
+	         ->setTransformTargetEased(serial, x, y, scaleX, scaleY, durationMs, x1, y1, x2, y2))
 		return false;
-	}
 
 	this->commitGlassIfIdle();
+	if (serial != 0) this->publishServerFeedbackRequest(serial);
 	return true;
 }
 
@@ -598,12 +624,23 @@ bool TahoeGlass::queueRegionMorphSpring(
     qreal stiffness,
     qreal epsilon
 ) {
-	auto* surface = this->ensureSurface();
-	if (!surface || !surface->supportsTransform()) return false;
+	QPointer guard(this);
+	auto* protocolSurface = this->ensureSurface();
+	if (!guard || !protocolSurface || protocolSurface != this->surface.get()
+	    || !protocolSurface->supportsTransform())
+		return false;
+	const auto serial = this->feedbackAvailable() ? this->allocateFeedbackSerial() : 0;
 
-	this->pendingMorph =
-	    PendingMorph {.regionId = regionId, .eased = false, .p1 = dampingRatio, .p2 = stiffness, .p3 = epsilon};
-	this->updateRegions();
+	this->queueFeedbackMorph(
+	    PendingMorph {
+	        .serial = serial,
+	        .regionId = regionId,
+	        .eased = false,
+	        .p1 = dampingRatio,
+	        .p2 = stiffness,
+	        .p3 = epsilon,
+	    }
+	);
 	return true;
 }
 
@@ -615,20 +652,196 @@ bool TahoeGlass::queueRegionMorphEased(
     qreal x2,
     qreal y2
 ) {
-	auto* surface = this->ensureSurface();
-	if (!surface || !surface->supportsTransform()) return false;
+	QPointer guard(this);
+	auto* protocolSurface = this->ensureSurface();
+	if (!guard || !protocolSurface || protocolSurface != this->surface.get()
+	    || !protocolSurface->supportsTransform())
+		return false;
+	const auto serial = this->feedbackAvailable() ? this->allocateFeedbackSerial() : 0;
 
-	this->pendingMorph = PendingMorph {
-	    .regionId = regionId,
-	    .eased = true,
-	    .p1 = durationMs,
-	    .p2 = x1,
-	    .p3 = y1,
-	    .p4 = x2,
-	    .p5 = y2,
-	};
-	this->updateRegions();
+	this->queueFeedbackMorph(
+	    PendingMorph {
+	        .serial = serial,
+	        .regionId = regionId,
+	        .eased = true,
+	        .p1 = durationMs,
+	        .p2 = x1,
+	        .p3 = y1,
+	        .p4 = x2,
+	        .p5 = y2,
+	    }
+	);
 	return true;
+}
+
+void TahoeGlass::configureSurfaceFeedback(bool replayCapabilities) {
+	if (!this->surface) return;
+	this->surface->setEventHandlers(
+	    [this](quint32 capabilities) { this->handleCapabilities(capabilities); },
+	    [this](quint32 serial, quint32 status) { this->handleTransformFeedback(serial, status); }
+	);
+	if (replayCapabilities) this->handleCapabilities(this->surface->capabilities());
+}
+
+void TahoeGlass::handleCapabilities(quint32 capabilities) {
+	this->mFeedbackAdvertised = this->surface && this->surface->supportsFeedback()
+	                         && impl::TahoeGlassSurface::hasTransformFeedbackCapability(capabilities);
+	this->setAvailable(this->mAvailable);
+}
+
+void TahoeGlass::handleTransformFeedback(quint32 serial, quint32 status) {
+	if (serial == 0 || status > Cancelled || !this->mServerOwnedTransformSerials.remove(serial))
+		return;
+
+	QPointer guard(this);
+	const auto clearsLatest = serial == this->mActiveTransformSerial;
+	if (clearsLatest) this->setLatestFeedbackIntent(0);
+	if (!guard) return;
+	emit this->transformFinished(serial, status);
+}
+
+quint32 TahoeGlass::allocateFeedbackSerial() {
+	quint32 serial = 0;
+	do {
+		serial = this->mNextTransformSerial++;
+	} while (serial == 0 || serial == this->mActiveTransformSerial
+	         || this->mServerOwnedTransformSerials.contains(serial)
+	         || (this->pendingMorph && this->pendingMorph->serial == serial));
+	return serial;
+}
+
+void TahoeGlass::setLatestFeedbackIntent(quint32 serial) {
+	const auto activeChanged = serial != this->mActiveTransformSerial;
+	const auto inFlight = serial != 0;
+	const auto inFlightChanged = inFlight != this->mTransformInFlight;
+	this->mActiveTransformSerial = serial;
+	this->mTransformInFlight = inFlight;
+
+	QPointer guard(this);
+	if (activeChanged) emit this->activeTransformSerialChanged();
+	if (!guard) return;
+	// A direct signal handler may synchronously install a newer intent or tear
+	// the object down. Emit the remaining edge only when its final value still
+	// matches the transaction that caused it.
+	if (inFlightChanged && this->mTransformInFlight == inFlight) {
+		emit this->transformInFlightChanged();
+	}
+}
+
+void TahoeGlass::publishServerFeedbackRequest(quint32 serial) {
+	std::optional<quint32> supersededPending;
+	if (this->pendingMorph && this->pendingMorph->serial != 0) {
+		supersededPending = this->pendingMorph->serial;
+	}
+	this->pendingMorph.reset();
+	this->mServerOwnedTransformSerials.insert(serial);
+	QPointer guard(this);
+	this->setLatestFeedbackIntent(serial);
+	if (!guard) return;
+	if (supersededPending && *supersededPending != serial) {
+		emit this->transformFinished(*supersededPending, Superseded);
+	}
+}
+
+void TahoeGlass::queueFeedbackMorph(PendingMorph morph) {
+	std::optional<quint32> supersededPending;
+	if (this->pendingMorph && this->pendingMorph->serial != 0) {
+		supersededPending = this->pendingMorph->serial;
+	}
+	this->pendingMorph = morph;
+	QPointer guard(this);
+	this->updateRegions();
+	if (!guard) return;
+	if (morph.serial != 0 || supersededPending) this->setLatestFeedbackIntent(morph.serial);
+	if (!guard) return;
+	if (supersededPending && *supersededPending != morph.serial) {
+		emit this->transformFinished(*supersededPending, Superseded);
+	}
+}
+
+void TahoeGlass::markPendingMorphServerOwned(quint32 serial) {
+	if (!this->pendingMorph || this->pendingMorph->serial != serial) return;
+	this->pendingMorph.reset();
+	if (serial != 0) this->mServerOwnedTransformSerials.insert(serial);
+}
+
+void TahoeGlass::finishPendingFeedback(quint32 serial, quint32 status) {
+	if (!this->pendingMorph || this->pendingMorph->serial != serial) return;
+	this->pendingMorph.reset();
+	if (serial == 0) return;
+	QPointer guard(this);
+	if (this->mActiveTransformSerial == serial) this->setLatestFeedbackIntent(0);
+	if (!guard) return;
+	emit this->transformFinished(serial, status);
+}
+
+void TahoeGlass::cancelOutstandingFeedback() {
+	QSet<quint32> outstanding = this->mServerOwnedTransformSerials;
+	if (this->pendingMorph && this->pendingMorph->serial != 0) {
+		outstanding.insert(this->pendingMorph->serial);
+	}
+
+	QList<quint32> ordered;
+	if (this->mActiveTransformSerial != 0 && outstanding.remove(this->mActiveTransformSerial)) {
+		ordered.append(this->mActiveTransformSerial);
+	}
+	ordered.append(outstanding.values());
+
+	this->pendingMorph.reset();
+	this->mServerOwnedTransformSerials.clear();
+	QPointer guard(this);
+	this->setLatestFeedbackIntent(0);
+	if (!guard) return;
+	for (const auto serial: ordered) {
+		if (!guard) return;
+		emit this->transformFinished(serial, Cancelled);
+	}
+}
+
+void TahoeGlass::handoffFeedbackStateFrom(TahoeGlass& previous) {
+	// The protocol resource survives attached-object replacement, so its serial
+	// allocator must survive too. Copy the exact continuation rather than using
+	// a numeric maximum: quint32 serials intentionally wrap.
+	this->mNextTransformSerial = previous.mNextTransformSerial;
+
+	Q_ASSERT(this->mServerOwnedTransformSerials.isEmpty());
+	const auto cancelledPending = previous.pendingMorph && previous.pendingMorph->serial != 0
+	                                ? std::optional(previous.pendingMorph->serial)
+	                                : std::nullopt;
+	const auto active =
+	    previous.mServerOwnedTransformSerials.contains(previous.mActiveTransformSerial)
+	        ? previous.mActiveTransformSerial
+	        : 0;
+	const auto previousWasInFlight = previous.mTransformInFlight;
+	const auto thisWasInFlight = this->mTransformInFlight;
+	const auto previousActiveChanged = previous.mActiveTransformSerial != 0;
+	const auto thisActiveChanged = this->mActiveTransformSerial != active;
+	this->mServerOwnedTransformSerials = std::move(previous.mServerOwnedTransformSerials);
+	previous.pendingMorph.reset();
+	previous.mServerOwnedTransformSerials.clear();
+	previous.mActiveTransformSerial = 0;
+	previous.mTransformInFlight = false;
+	this->mActiveTransformSerial = active;
+	this->mTransformInFlight = active != 0;
+	previous.mAcceptingProtocolRequests = false;
+	this->mAcceptingProtocolRequests = true;
+
+	// Commit both objects' state before notifying. The server's eventual
+	// terminal event is delivered through the callback installed on the new
+	// owner and is the only transformFinished event for this serial.
+	QPointer previousGuard(&previous);
+	QPointer thisGuard(this);
+	if (previousActiveChanged) emit previous.activeTransformSerialChanged();
+	if (!previousGuard || !thisGuard) return;
+	if (previousWasInFlight && !previous.mTransformInFlight) {
+		emit previous.transformInFlightChanged();
+	}
+	if (!previousGuard || !thisGuard) return;
+	if (thisActiveChanged) emit this->activeTransformSerialChanged();
+	if (!previousGuard || !thisGuard) return;
+	if (thisWasInFlight != this->mTransformInFlight) emit this->transformInFlightChanged();
+	if (!previousGuard || !thisGuard) return;
+	if (cancelledPending) emit previous.transformFinished(*cancelledPending, Cancelled);
 }
 
 bool TahoeGlass::fallbackEnabled() const { return this->mFallbackEnabled; }
@@ -649,12 +862,15 @@ void TahoeGlass::setFallbackEnabled(bool enabled) {
 }
 
 void TahoeGlass::platformSurfaceAboutToBeDestroyed() {
+	this->mAcceptingProtocolRequests = false;
 	this->surface = nullptr;
 	this->pendingRegions = false;
-	this->pendingMorph.reset();
 	this->mRepaintInFlight = false;
-	this->setAvailable(false);
 	this->clearFallback();
+	QPointer guard(this);
+	this->setAvailable(false);
+	if (!guard) return;
+	this->cancelOutstandingFeedback();
 }
 
 bool TahoeGlass::filteredWindowEvent(QObject* object, QEvent* event) {
@@ -702,18 +918,32 @@ void TahoeGlass::backingWindowConnected() {
 }
 
 void TahoeGlass::waylandWindowDestroyed() {
-	this->setAvailable(false);
+	this->mAcceptingProtocolRequests = false;
 	this->clearFallback();
+	QPointer guard(this);
+	this->setAvailable(false);
+	if (!guard) return;
+	this->cancelOutstandingFeedback();
 }
 
 void TahoeGlass::waylandSurfaceCreated() {
-	auto* prev = this->previousAttachedObject("qs_tahoe_glass", this);
+	this->mAcceptingProtocolRequests = true;
+	QPointer guard(this);
+	QPointer<TahoeGlass> prev = this->previousAttachedObject("qs_tahoe_glass", this);
 
 	if (prev && prev->surface) {
 		this->surface.swap(prev->surface);
-		prev->pendingRegions = false;
-		prev->pendingMorph.reset();
-		prev->setAvailable(false);
+		this->configureSurfaceFeedback(false);
+		this->handoffFeedbackStateFrom(*prev);
+		if (!guard || !this->mAcceptingProtocolRequests || !this->surface) return;
+		this->handleCapabilities(this->surface->capabilities());
+		if (!guard || !this->mAcceptingProtocolRequests || !this->surface) return;
+		if (prev) {
+			prev->pendingRegions = false;
+			prev->pendingMorph.reset();
+			prev->setAvailable(false);
+		}
+		if (!guard) return;
 	}
 
 	if (!this->surface) {
@@ -721,6 +951,8 @@ void TahoeGlass::waylandSurfaceCreated() {
 			this->surface = std::unique_ptr<impl::TahoeGlassSurface>(
 			    manager->createGlassSurface(this->mWaylandWindow)
 			);
+			this->configureSurfaceFeedback();
+			if (!guard || !this->mAcceptingProtocolRequests) return;
 		}
 	}
 
@@ -729,7 +961,6 @@ void TahoeGlass::waylandSurfaceCreated() {
 	}
 
 	this->setAttachedObject("qs_tahoe_glass", this);
-	this->setAvailable(this->surface != nullptr);
 	this->pendingRegions = true;
 	// A fresh surface starts with no render in flight; the upcoming show will
 	// post its own UpdateRequest and set the flag again. Resetting here also
@@ -738,6 +969,8 @@ void TahoeGlass::waylandSurfaceCreated() {
 	// region update is never deferred on a stale flag.
 	this->mRepaintInFlight = false;
 	this->schedulePolish();
+	this->setAvailable(this->surface != nullptr);
+	if (!guard) return;
 
 	if (prev && !prev->proxyWindow && (this->surface || !prev->fallbackEffect)) {
 		prev->deleteLater();
@@ -757,12 +990,16 @@ void TahoeGlass::waylandSurfaceCreated() {
 }
 
 void TahoeGlass::waylandSurfaceDestroyed() {
+	this->mAcceptingProtocolRequests = false;
 	this->surface = nullptr;
 	this->pendingRegions = false;
-	this->pendingMorph.reset();
 	this->mRepaintInFlight = false;
-	this->setAvailable(false);
 	this->clearFallback();
+	QPointer guard(this);
+	this->setAvailable(false);
+	if (!guard) return;
+	this->cancelOutstandingFeedback();
+	if (!guard) return;
 
 	if (!this->proxyWindow) {
 		this->deleteLater();
@@ -791,7 +1028,9 @@ void TahoeGlass::onWindowPolished() {
 	if (!this->pendingRegions || !this->mWaylandWindow || !this->mWaylandWindow->surface()) return;
 	this->pendingRegions = false;
 
+	QPointer guard(this);
 	this->ensureSurface();
+	if (!guard) return;
 
 	QList<impl::TahoeGlassRegionState> logicalRegions;
 	QList<impl::TahoeGlassRegionState> surfaceRegions;
@@ -815,11 +1054,12 @@ void TahoeGlass::onWindowPolished() {
 		const auto changed = this->surface->setRegions(surfaceRegions);
 
 		bool morphSent = false;
+		std::optional<quint32> rejectedMorph;
 		if (this->pendingMorph) {
 			const auto morph = *this->pendingMorph;
-			this->pendingMorph.reset();
 			if (morph.eased) {
 				morphSent = this->surface->setRegionMorphEased(
+				    morph.serial,
 				    morph.regionId,
 				    morph.p1,
 				    morph.p2,
@@ -829,8 +1069,11 @@ void TahoeGlass::onWindowPolished() {
 				);
 			} else {
 				morphSent =
-				    this->surface->setRegionMorphSpring(morph.regionId, morph.p1, morph.p2, morph.p3);
+				    this->surface
+				        ->setRegionMorphSpring(morph.serial, morph.regionId, morph.p1, morph.p2, morph.p3);
 			}
+			if (morphSent) this->markPendingMorphServerOwned(morph.serial);
+			else rejectedMorph = morph.serial;
 		}
 
 		// TahoeGlass regions are double-buffered wl_surface pending state.
@@ -850,12 +1093,17 @@ void TahoeGlass::onWindowPolished() {
 		if (changed && !morphSent) {
 			this->commitGlassIfIdle();
 		}
-		this->setAvailable(true);
 		this->clearFallback();
+		this->setAvailable(true);
+		if (!guard) return;
+		if (rejectedMorph) this->finishPendingFeedback(*rejectedMorph, Rejected);
 	} else {
-		this->pendingMorph.reset();
-		this->setAvailable(false);
+		const auto rejectedMorph =
+		    this->pendingMorph ? std::optional(this->pendingMorph->serial) : std::nullopt;
 		this->updateFallback(logicalRegions);
+		this->setAvailable(false);
+		if (!guard) return;
+		if (rejectedMorph) this->finishPendingFeedback(*rejectedMorph, Rejected);
 	}
 }
 
@@ -963,13 +1211,25 @@ void TahoeGlass::setAvailable(bool available) {
 	// snapshot regardless of which signal they react to.
 	const auto transformAvailable =
 	    available && this->surface != nullptr && this->surface->supportsTransform();
+	const auto feedbackAvailable =
+	    transformAvailable && this->surface->supportsFeedback() && this->mFeedbackAdvertised;
 	const auto availableEdge = available != this->mAvailable;
 	const auto transformEdge = transformAvailable != this->mTransformAvailable;
+	const auto feedbackEdge = feedbackAvailable != this->mFeedbackAvailable;
 	this->mAvailable = available;
 	this->mTransformAvailable = transformAvailable;
+	this->mFeedbackAvailable = feedbackAvailable;
 
+	QPointer guard(this);
 	if (availableEdge) emit this->availableChanged();
-	if (transformEdge) emit this->transformAvailableChanged();
+	if (!guard) return;
+	if (transformEdge && this->mTransformAvailable == transformAvailable) {
+		emit this->transformAvailableChanged();
+	}
+	if (!guard) return;
+	if (feedbackEdge && this->mFeedbackAvailable == feedbackAvailable) {
+		emit this->feedbackAvailableChanged();
+	}
 }
 
 void TahoeGlass::clearFallback() {
